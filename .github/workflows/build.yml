@@ -16,6 +16,7 @@ jobs:
       - name: Download OpenWrt ImageBuilder
         run: |
           wget -q https://downloads.openwrt.org/releases/25.12.4/targets/ipq40xx/generic/openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+
           tar --zstd -xf openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
 
       # ============================================================
@@ -300,73 +301,101 @@ jobs:
           chmod +x files/usr/bin/lte-watchdog
 
       # ============================================================
-      # DOWNLOAD REAL 4ICEG APK PACKAGES
+      # PREPARE 4ICEG + APN APK REPOSITORY
       # ============================================================
 
-      - name: Download 4IceG APK packages
+      - name: Prepare custom APK repository
         run: |
 
           IB="openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64"
+
+          rm -rf /tmp/iceg
+          rm -rf /tmp/apn
 
           mkdir -p "$IB/packages"
 
+          # --------------------------------------------------------
+          # 4ICEG
+          # --------------------------------------------------------
+
           git clone --depth 1 \
             https://github.com/4IceG/Modem-extras-apk.git \
-            /tmp/Modem-extras-apk
+            /tmp/iceg
 
-          echo "Searching 4IceG APK packages..."
+          echo "4IceG packages available:"
 
-          find /tmp/Modem-extras-apk \
+          find /tmp/iceg/myapk \
+            -maxdepth 1 \
             -type f \
-            \( -name 'luci-app-3ginfo-lite*.apk' \
-            -o -name 'luci-app-modemband*.apk' \
-            -o -name 'luci-app-sms-tool-js*.apk' \
-            \) \
-            -exec cp -v {} "$IB/packages/" \;
+            -name '*.apk' \
+            -printf '%f\n' | sort
 
-          echo "Downloaded 4IceG packages:"
-          ls -lh "$IB/packages/"
+          # Copy ALL 4IceG APK packages.
+          # This includes:
+          # luci-app-3ginfo-lite
+          # luci-app-modemband
+          # modemband
+          # luci-app-sms-tool-js
+          # luci-app-sms-manager
+          # and their related packages.
 
-          # Require all three packages.
-          test -n "$(find "$IB/packages" -name 'luci-app-3ginfo-lite*.apk' -print -quit)"
-          test -n "$(find "$IB/packages" -name 'luci-app-modemband*.apk' -print -quit)"
-          test -n "$(find "$IB/packages" -name 'luci-app-sms-tool-js*.apk' -print -quit)"
+          cp /tmp/iceg/myapk/*.apk "$IB/packages/"
 
-      # ============================================================
-      # DOWNLOAD APN-WEB
-      # ============================================================
-
-      - name: Download APN package
-        run: |
-
-          IB="openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64"
-
-          mkdir -p /tmp/apn-repo
+          # --------------------------------------------------------
+          # APN-WEB
+          # --------------------------------------------------------
 
           git clone --depth 1 \
             https://github.com/ilblogdicristiangallo/apn-web-html_ipk.git \
-            /tmp/apn-repo
+            /tmp/apn
 
-          echo "Searching APN package..."
-
-          find /tmp/apn-repo \
-            -type f \
-            \( -name 'apn-web*.apk' -o -name 'apn-web*.ipk' \) \
-            -exec cp -v {} "$IB/packages/" \;
-
-          echo "APN package files:"
-          find "$IB/packages" \
+          find /tmp/apn \
             -maxdepth 1 \
             -type f \
-            -iname 'apn-web*' \
-            -ls
+            -name 'apn-web*.apk' \
+            -exec cp -v {} "$IB/packages/" \;
 
-          # Fail if repository does not provide an APK.
-          if ! find "$IB/packages" -maxdepth 1 -type f -name 'apn-web*.apk' | grep -q .; then
-              echo "ERROR: apn-web APK not found."
-              echo "The repository currently does not provide an installable APK for this ImageBuilder."
-              exit 1
-          fi
+          # --------------------------------------------------------
+          # CREATE ONE LOCAL APK INDEX
+          # --------------------------------------------------------
+
+          cd "$IB/packages"
+
+          rm -f packages.adb
+
+          "$PWD/../staging_dir/host/bin/apk" \
+            mkndx \
+            --allow-untrusted \
+            --output packages.adb \
+            *.apk
+
+          echo
+          echo "============================================"
+          echo "CUSTOM APK REPOSITORY"
+          echo "============================================"
+
+          ls -lh
+
+          echo
+          echo "============================================"
+          echo "CHECK REQUIRED PACKAGES"
+          echo "============================================"
+
+          for PKG in \
+            luci-app-3ginfo-lite \
+            luci-app-modemband \
+            modemband \
+            luci-app-sms-tool-js \
+            luci-app-sms-manager \
+            apn-web
+          do
+              echo "Checking: $PKG"
+
+              "$PWD/../staging_dir/host/bin/apk" \
+                search \
+                --repository file://"$PWD"/packages.adb \
+                "$PKG"
+          done
 
       # ============================================================
       # BUILD
@@ -396,6 +425,7 @@ jobs:
           kmod-usb-serial \
           kmod-usb-serial-option \
           kmod-usb-serial-wwan \
+          sms-tool \
           wireguard-tools \
           kmod-wireguard \
           luci-proto-wireguard \
@@ -415,35 +445,40 @@ jobs:
           luci-app-3ginfo-lite \
           luci-app-modemband \
           luci-app-sms-tool-js \
+          luci-app-sms-manager \
           apn-web" \
             FILES="../files"
 
       # ============================================================
-      # VERIFY INSTALLED PACKAGES
+      # VERIFY
       # ============================================================
 
-      - name: Verify requested packages
+      - name: Verify firmware
         run: |
 
           IB="openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64"
 
-          echo "============================================"
-          echo "IMAGEBUILDER PACKAGE FILES"
-          echo "============================================"
-
-          find "$IB/packages" \
-            -maxdepth 1 \
-            -type f \
-            -printf '%f\n' | sort
-
+          echo
           echo "============================================"
           echo "SYSUPGRADE IMAGE"
           echo "============================================"
 
-          ls -lh "$IB/bin/targets/ipq40xx/generic/"*sysupgrade.bin
+          ls -lh \
+            "$IB/bin/targets/ipq40xx/generic/"*sysupgrade.bin
+
+          echo
+          echo "============================================"
+          echo "MANIFEST"
+          echo "============================================"
+
+          find "$IB/bin/targets/ipq40xx/generic/" \
+            -maxdepth 1 \
+            -type f \
+            -name '*.manifest' \
+            -exec cat {} \; || true
 
       # ============================================================
-      # UPLOAD SYSUPGRADE
+      # UPLOAD
       # ============================================================
 
       - name: Upload sysupgrade firmware

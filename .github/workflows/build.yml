@@ -9,10 +9,18 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # DOWNLOAD OPENWRT IMAGEBUILDER
+      # ============================================================
+
       - name: Download OpenWrt ImageBuilder
         run: |
           wget -q https://downloads.openwrt.org/releases/25.12.4/targets/ipq40xx/generic/openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
           tar --zstd -xf openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+
+      # ============================================================
+      # PREPARE CUSTOM FILES
+      # ============================================================
 
       - name: Prepare custom files
         run: |
@@ -38,7 +46,10 @@ jobs:
               uci set wireless.$section.disabled='1'
           done
 
+          # ========================================================
           # MAIN 2.4 GHz
+          # ========================================================
+
           uci set wireless.main2g='wifi-iface'
           uci set wireless.main2g.device='radio0'
           uci set wireless.main2g.mode='ap'
@@ -48,7 +59,10 @@ jobs:
           uci set wireless.main2g.key='Mf286D-ChangeMe!2026'
           uci set wireless.main2g.disabled='0'
 
+          # ========================================================
           # MAIN 5 GHz
+          # ========================================================
+
           uci set wireless.main5g='wifi-iface'
           uci set wireless.main5g.device='radio1'
           uci set wireless.main5g.mode='ap'
@@ -58,20 +72,25 @@ jobs:
           uci set wireless.main5g.key='Mf286D-ChangeMe!2026'
           uci set wireless.main5g.disabled='0'
 
+          # ========================================================
           # GUEST NETWORK
+          # ========================================================
+
           uci set network.guest='interface'
           uci set network.guest.proto='static'
           uci set network.guest.ipaddr='192.168.50.1'
           uci set network.guest.netmask='255.255.255.0'
 
-          # GUEST DHCP
           uci set dhcp.guest='dhcp'
           uci set dhcp.guest.interface='guest'
           uci set dhcp.guest.start='100'
           uci set dhcp.guest.limit='100'
           uci set dhcp.guest.leasetime='12h'
 
+          # ========================================================
           # GUEST 2.4 GHz
+          # ========================================================
+
           uci set wireless.guest2g='wifi-iface'
           uci set wireless.guest2g.device='radio0'
           uci set wireless.guest2g.mode='ap'
@@ -81,7 +100,10 @@ jobs:
           uci set wireless.guest2g.key='Mf286D-Guest!2026'
           uci set wireless.guest2g.disabled='0'
 
+          # ========================================================
           # GUEST 5 GHz
+          # ========================================================
+
           uci set wireless.guest5g='wifi-iface'
           uci set wireless.guest5g.device='radio1'
           uci set wireless.guest5g.mode='ap'
@@ -110,6 +132,7 @@ jobs:
           uci set firewall.@forwarding[-1].src='guest'
           uci set firewall.@forwarding[-1].dest='wan'
 
+          # Guest DHCP
           uci add firewall rule
           uci set firewall.@rule[-1].name='Guest-DHCP'
           uci set firewall.@rule[-1].src='guest'
@@ -117,6 +140,7 @@ jobs:
           uci set firewall.@rule[-1].dest_port='67-68'
           uci set firewall.@rule[-1].target='ACCEPT'
 
+          # Guest DNS
           uci add firewall rule
           uci set firewall.@rule[-1].name='Guest-DNS'
           uci set firewall.@rule[-1].src='guest'
@@ -139,12 +163,12 @@ jobs:
           config samba
               option name 'MF286D'
               option workgroup 'WORKGROUP'
-              option description 'MF286D USB Storage'
+              option description 'MF286D Home Storage'
               option homes '0'
               option interface 'lan'
 
           config sambashare
-              option name 'USB'
+              option name 'Home'
               option path '/mnt/usb'
               option read_only 'no'
               option guest_ok 'yes'
@@ -276,32 +300,73 @@ jobs:
           chmod +x files/usr/bin/lte-watchdog
 
       # ============================================================
-      # DOWNLOAD 4ICEG / APN APK REPOSITORIES
+      # DOWNLOAD REAL 4ICEG APK PACKAGES
       # ============================================================
 
-      - name: Prepare custom APK repositories
+      - name: Download 4IceG APK packages
         run: |
 
           IB="openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64"
 
           mkdir -p "$IB/packages"
 
-          # Download repository indexes
-          wget -q \
-            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb \
-            -O "$IB/packages/iceg-packages.adb"
+          git clone --depth 1 \
+            https://github.com/4IceG/Modem-extras-apk.git \
+            /tmp/Modem-extras-apk
 
-          wget -q \
-            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem \
-            -O "$IB/packages/IceG-apkpub.pem"
+          echo "Searching 4IceG APK packages..."
 
-          # Download APN repository index if available
-          wget -q \
-            https://github.com/ilblogdicristiangallo/apn-web-html_ipk/raw/refs/heads/main/packages.adb \
-            -O "$IB/packages/apn-packages.adb" || true
+          find /tmp/Modem-extras-apk \
+            -type f \
+            \( -name 'luci-app-3ginfo-lite*.apk' \
+            -o -name 'luci-app-modemband*.apk' \
+            -o -name 'luci-app-sms-tool-js*.apk' \
+            \) \
+            -exec cp -v {} "$IB/packages/" \;
 
-          echo "Custom APK files:"
+          echo "Downloaded 4IceG packages:"
           ls -lh "$IB/packages/"
+
+          # Require all three packages.
+          test -n "$(find "$IB/packages" -name 'luci-app-3ginfo-lite*.apk' -print -quit)"
+          test -n "$(find "$IB/packages" -name 'luci-app-modemband*.apk' -print -quit)"
+          test -n "$(find "$IB/packages" -name 'luci-app-sms-tool-js*.apk' -print -quit)"
+
+      # ============================================================
+      # DOWNLOAD APN-WEB
+      # ============================================================
+
+      - name: Download APN package
+        run: |
+
+          IB="openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64"
+
+          mkdir -p /tmp/apn-repo
+
+          git clone --depth 1 \
+            https://github.com/ilblogdicristiangallo/apn-web-html_ipk.git \
+            /tmp/apn-repo
+
+          echo "Searching APN package..."
+
+          find /tmp/apn-repo \
+            -type f \
+            \( -name 'apn-web*.apk' -o -name 'apn-web*.ipk' \) \
+            -exec cp -v {} "$IB/packages/" \;
+
+          echo "APN package files:"
+          find "$IB/packages" \
+            -maxdepth 1 \
+            -type f \
+            -iname 'apn-web*' \
+            -ls
+
+          # Fail if repository does not provide an APK.
+          if ! find "$IB/packages" -maxdepth 1 -type f -name 'apn-web*.apk' | grep -q .; then
+              echo "ERROR: apn-web APK not found."
+              echo "The repository currently does not provide an installable APK for this ImageBuilder."
+              exit 1
+          fi
 
       # ============================================================
       # BUILD
@@ -346,8 +411,36 @@ jobs:
           wget-ssl \
           ca-bundle \
           jq \
-          tcpdump" \
+          tcpdump \
+          luci-app-3ginfo-lite \
+          luci-app-modemband \
+          luci-app-sms-tool-js \
+          apn-web" \
             FILES="../files"
+
+      # ============================================================
+      # VERIFY INSTALLED PACKAGES
+      # ============================================================
+
+      - name: Verify requested packages
+        run: |
+
+          IB="openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64"
+
+          echo "============================================"
+          echo "IMAGEBUILDER PACKAGE FILES"
+          echo "============================================"
+
+          find "$IB/packages" \
+            -maxdepth 1 \
+            -type f \
+            -printf '%f\n' | sort
+
+          echo "============================================"
+          echo "SYSUPGRADE IMAGE"
+          echo "============================================"
+
+          ls -lh "$IB/bin/targets/ipq40xx/generic/"*sysupgrade.bin
 
       # ============================================================
       # UPLOAD SYSUPGRADE

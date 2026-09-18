@@ -1,0 +1,399 @@
+name: MF286D OpenWrt 25.12.4 FULL
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+
+      # ============================================================
+      # DOWNLOAD IMAGEBUILDER
+      # ============================================================
+
+      - name: Download OpenWrt ImageBuilder
+        run: |
+          wget -q https://downloads.openwrt.org/releases/25.12.4/targets/ipq40xx/generic/openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+          tar --zstd -xf openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+
+      # ============================================================
+      # PREPARE CUSTOM FILES
+      # ============================================================
+
+      - name: Prepare custom configuration
+        run: |
+
+          mkdir -p files/etc/uci-defaults
+          mkdir -p files/etc/init.d
+          mkdir -p files/usr/bin
+          mkdir -p files/etc/config
+
+          # ========================================================
+          # WIFI + GUEST NETWORK
+          # ========================================================
+
+          cat > files/etc/uci-defaults/99-mf286d-custom <<'EOF'
+          #!/bin/sh
+
+          # --------------------------------------------------------
+          # Country
+          # --------------------------------------------------------
+
+          uci set wireless.radio0.country='IT'
+          uci set wireless.radio1.country='IT'
+
+          # --------------------------------------------------------
+          # Disable existing WiFi interfaces
+          # --------------------------------------------------------
+
+          for section in $(uci show wireless | sed -n "s/^wireless\.\([^=]*\)=wifi-iface$/\1/p"); do
+              uci set wireless.$section.disabled='1'
+          done
+
+          # --------------------------------------------------------
+          # MAIN 2.4 GHz
+          # --------------------------------------------------------
+
+          uci set wireless.main2g='wifi-iface'
+          uci set wireless.main2g.device='radio0'
+          uci set wireless.main2g.mode='ap'
+          uci set wireless.main2g.network='lan'
+          uci set wireless.main2g.ssid='MF286D-MAIN'
+          uci set wireless.main2g.encryption='sae-mixed'
+          uci set wireless.main2g.key='CHANGE-ME-MAIN'
+          uci set wireless.main2g.disabled='0'
+
+          # --------------------------------------------------------
+          # MAIN 5 GHz
+          # --------------------------------------------------------
+
+          uci set wireless.main5g='wifi-iface'
+          uci set wireless.main5g.device='radio1'
+          uci set wireless.main5g.mode='ap'
+          uci set wireless.main5g.network='lan'
+          uci set wireless.main5g.ssid='MF286D-MAIN'
+          uci set wireless.main5g.encryption='sae-mixed'
+          uci set wireless.main5g.key='CHANGE-ME-MAIN'
+          uci set wireless.main5g.disabled='0'
+
+          # --------------------------------------------------------
+          # GUEST NETWORK
+          # --------------------------------------------------------
+
+          uci set network.guest='interface'
+          uci set network.guest.proto='static'
+          uci set network.guest.ipaddr='192.168.50.1'
+          uci set network.guest.netmask='255.255.255.0'
+
+          # --------------------------------------------------------
+          # GUEST DHCP
+          # --------------------------------------------------------
+
+          uci set dhcp.guest='dhcp'
+          uci set dhcp.guest.interface='guest'
+          uci set dhcp.guest.start='100'
+          uci set dhcp.guest.limit='100'
+          uci set dhcp.guest.leasetime='12h'
+
+          # --------------------------------------------------------
+          # GUEST 2.4 GHz
+          # --------------------------------------------------------
+
+          uci set wireless.guest2g='wifi-iface'
+          uci set wireless.guest2g.device='radio0'
+          uci set wireless.guest2g.mode='ap'
+          uci set wireless.guest2g.network='guest'
+          uci set wireless.guest2g.ssid='MF286D-GUEST'
+          uci set wireless.guest2g.encryption='sae-mixed'
+          uci set wireless.guest2g.key='CHANGE-ME-GUEST'
+          uci set wireless.guest2g.disabled='0'
+
+          # --------------------------------------------------------
+          # GUEST 5 GHz
+          # --------------------------------------------------------
+
+          uci set wireless.guest5g='wifi-iface'
+          uci set wireless.guest5g.device='radio1'
+          uci set wireless.guest5g.mode='ap'
+          uci set wireless.guest5g.network='guest'
+          uci set wireless.guest5g.ssid='MF286D-GUEST'
+          uci set wireless.guest5g.encryption='sae-mixed'
+          uci set wireless.guest5g.key='CHANGE-ME-GUEST'
+          uci set wireless.guest5g.disabled='0'
+
+          uci commit wireless
+          uci commit network
+          uci commit dhcp
+
+          # --------------------------------------------------------
+          # GUEST FIREWALL
+          # --------------------------------------------------------
+
+          uci add firewall zone
+          uci set firewall.@zone[-1].name='guest'
+          uci set firewall.@zone[-1].network='guest'
+          uci set firewall.@zone[-1].input='REJECT'
+          uci set firewall.@zone[-1].output='ACCEPT'
+          uci set firewall.@zone[-1].forward='REJECT'
+
+          uci add firewall forwarding
+          uci set firewall.@forwarding[-1].src='guest'
+          uci set firewall.@forwarding[-1].dest='wan'
+
+          # DHCP
+          uci add firewall rule
+          uci set firewall.@rule[-1].name='Guest-DHCP'
+          uci set firewall.@rule[-1].src='guest'
+          uci set firewall.@rule[-1].proto='udp'
+          uci set firewall.@rule[-1].dest_port='67-68'
+          uci set firewall.@rule[-1].target='ACCEPT'
+
+          # DNS
+          uci add firewall rule
+          uci set firewall.@rule[-1].name='Guest-DNS'
+          uci set firewall.@rule[-1].src='guest'
+          uci set firewall.@rule[-1].proto='tcp udp'
+          uci set firewall.@rule[-1].dest_port='53'
+          uci set firewall.@rule[-1].target='ACCEPT'
+
+          uci commit firewall
+
+          exit 0
+          EOF
+
+          chmod +x files/etc/uci-defaults/99-mf286d-custom
+
+          # ========================================================
+          # SAMBA CONFIG
+          # ========================================================
+
+          cat > files/etc/config/samba4 <<'EOF'
+          config samba
+              option name 'MF286D'
+              option workgroup 'WORKGROUP'
+              option description 'MF286D USB Storage'
+              option homes '0'
+              option interface 'lan'
+
+          config sambashare
+              option name 'USB'
+              option path '/mnt/usb'
+              option read_only 'no'
+              option guest_ok 'yes'
+              option create_mask '0666'
+              option dir_mask '0777'
+          EOF
+
+          # ========================================================
+          # USB MOUNT DIRECTORY
+          # ========================================================
+
+          mkdir -p files/mnt/usb
+
+          # ========================================================
+          # LTE WATCHDOG
+          # ========================================================
+
+          cat > files/etc/init.d/lte-watchdog <<'EOF'
+          #!/bin/sh /etc/rc.common
+
+          START=99
+          USE_PROCD=1
+
+          start_service() {
+              procd_open_instance
+              procd_set_param command /usr/bin/lte-watchdog
+              procd_set_param respawn 3600 10 5
+              procd_close_instance
+          }
+          EOF
+
+          chmod +x files/etc/init.d/lte-watchdog
+
+          cat > files/usr/bin/lte-watchdog <<'EOF'
+          #!/bin/sh
+
+          STATE="/tmp/lte-watchdog.fail"
+          COOLDOWN="/tmp/lte-watchdog.recovery"
+
+          FAIL=0
+
+          [ -f "$STATE" ] && FAIL=$(cat "$STATE" 2>/dev/null)
+
+          while true; do
+
+              # ----------------------------------------------------
+              # Check Internet by IP
+              # ----------------------------------------------------
+
+              IP_OK=0
+              DNS_OK=0
+
+              if ping -c 2 -W 5 1.1.1.1 >/dev/null 2>&1; then
+                  IP_OK=1
+              fi
+
+              # ----------------------------------------------------
+              # Check DNS
+              # ----------------------------------------------------
+
+              if nslookup openwrt.org 1.1.1.1 >/dev/null 2>&1; then
+                  DNS_OK=1
+              fi
+
+              if [ "$IP_OK" = "1" ] && [ "$DNS_OK" = "1" ]; then
+                  FAIL=0
+                  echo 0 > "$STATE"
+                  logger -t lte-watchdog "LTE/Internet OK"
+              else
+
+                  FAIL=$((FAIL + 1))
+                  echo "$FAIL" > "$STATE"
+
+                  logger -t lte-watchdog "LTE/Internet failure $FAIL"
+
+                  # ------------------------------------------------
+                  # Recovery 1 - WAN reconnect
+                  # ------------------------------------------------
+
+                  if [ "$FAIL" -eq 2 ]; then
+                      logger -t lte-watchdog "Recovery 1: WAN reconnect"
+
+                      ifdown wan 2>/dev/null
+                      sleep 10
+                      ifup wan 2>/dev/null
+
+                      touch "$COOLDOWN"
+                  fi
+
+                  # ------------------------------------------------
+                  # Recovery 2 - ModemManager
+                  # ------------------------------------------------
+
+                  if [ "$FAIL" -eq 4 ]; then
+                      logger -t lte-watchdog "Recovery 2: ModemManager restart"
+
+                      /etc/init.d/modemmanager restart 2>/dev/null
+
+                      sleep 30
+                  fi
+
+                  # ------------------------------------------------
+                  # Recovery 3 - modem reset
+                  # ------------------------------------------------
+
+                  if [ "$FAIL" -eq 6 ]; then
+                      logger -t lte-watchdog "Recovery 3: modem reset"
+
+                      if command -v mmcli >/dev/null 2>&1; then
+                          MODEM_ID=$(mmcli -L 2>/dev/null | sed -n 's#.*Modem/\([0-9]*\).*#\1#p' | head -n1)
+
+                          if [ -n "$MODEM_ID" ]; then
+                              mmcli -m "$MODEM_ID" --reset >/dev/null 2>&1
+                              sleep 60
+                          fi
+                      fi
+                  fi
+
+                  # ------------------------------------------------
+                  # Recovery 4 - final router reboot
+                  # ------------------------------------------------
+
+                  if [ "$FAIL" -ge 8 ]; then
+
+                      if [ ! -f "$COOLDOWN" ]; then
+                          logger -t lte-watchdog "Recovery failed: rebooting router"
+                          touch "$COOLDOWN"
+                          reboot
+                      else
+                          logger -t lte-watchdog "Reboot cooldown active"
+                      fi
+                  fi
+              fi
+
+              sleep 60
+          done
+          EOF
+
+          chmod +x files/usr/bin/lte-watchdog
+
+      # ============================================================
+      # BUILD
+      # ============================================================
+
+      - name: Build MF286D firmware
+        run: |
+
+          cd openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64
+
+          # --------------------------------------------------------
+          # 4IceG APK repository
+          # --------------------------------------------------------
+
+          echo "https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb" >> repositories
+
+          mkdir -p keys
+
+          wget -q \
+            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem \
+            -O keys/IceG-apkpub.pem
+
+          # --------------------------------------------------------
+          # Image
+          # --------------------------------------------------------
+
+          make image \
+            PROFILE="zte_mf286d" \
+            PACKAGES="\
+          luci \
+          luci-ssl \
+          luci-proto-qmi \
+          luci-proto-mbim \
+          luci-proto-modemmanager \
+          modemmanager \
+          mmcli \
+          uqmi \
+          umbim \
+          libqmi \
+          usb-modeswitch \
+          kmod-usb-net-qmi-wwan \
+          kmod-usb-net-cdc-mbim \
+          kmod-usb-wdm \
+          kmod-usb-serial \
+          kmod-usb-serial-option \
+          kmod-usb-serial-wwan \
+          wireguard-tools \
+          kmod-wireguard \
+          luci-proto-wireguard \
+          openvpn-openssl \
+          luci-app-openvpn \
+          kmod-usb-storage \
+          block-mount \
+          kmod-fs-ext4 \
+          kmod-fs-vfat \
+          samba4-server \
+          luci-app-samba4 \
+          curl \
+          wget-ssl \
+          ca-bundle \
+          jq \
+          tcpdump \
+          luci-app-3ginfo-lite \
+          luci-app-modemband \
+          luci-app-sms-tool-js \
+          luci-app-sms-manager \
+          apn-web \
+          " \
+            FILES="../files"
+
+      # ============================================================
+      # UPLOAD SYSUPGRADE
+      # ============================================================
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: MF286D-OpenWrt-25.12.4-FULL
+          path: openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64/bin/targets/ipq40xx/generic/*sysupgrade.bin

@@ -10,47 +10,59 @@ runs-on: ubuntu-24.04
 steps:
 
   # ============================================================
-  # 1. DOWNLOAD OPENWRT IMAGEBUILDER
+  # DOWNLOAD OPENWRT IMAGEBUILDER
   # ============================================================
   - name: Download OpenWrt ImageBuilder
     shell: bash
     run: |
-      set -e
+      set -eu
 
       wget -q \
-        https://downloads.openwrt.org/releases/25.12.4/targets/ipq40xx/generic/openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+        "https://downloads.openwrt.org/releases/25.12.4/targets/ipq40xx/generic/openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst"
 
       tar --zstd -xf \
-        openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+        "openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst"
 
-      IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-*' | head -n1)"
+      IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64' | head -n 1)"
 
       if [ -z "$IB_DIR" ]; then
-        echo "ImageBuilder directory not found"
+        echo "ERROR: ImageBuilder directory not found"
         exit 1
       fi
 
       echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
 
+      echo "ImageBuilder:"
+      echo "$IB_DIR"
+
 
   # ============================================================
-  # 2. ADD 4ICEG APK REPOSITORY + TRUST KEY
+  # CONFIGURE 4ICEG APK REPOSITORY
   # ============================================================
-  - name: Configure 4IceG APK repository
+  - name: Configure 4IceG repository
     shell: bash
     run: |
-      set -e
+      set -eu
 
       cd "$IB_DIR"
 
       mkdir -p keys
 
       wget -q \
-        https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem \
-        -O keys/IceG-apkpub.pem
+        "https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem" \
+        -O "keys/IceG-apkpub.pem"
 
-      echo "https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb" \
-        >> repositories
+      if [ ! -s "keys/IceG-apkpub.pem" ]; then
+        echo "ERROR: 4IceG public key was not downloaded"
+        exit 1
+      fi
+
+      REPO_URL="https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb"
+
+      grep -v "4IceG/Modem-extras-apk" repositories > repositories.new || true
+      mv repositories.new repositories
+
+      echo "$REPO_URL" >> repositories
 
       echo
       echo "=== APK repositories ==="
@@ -58,46 +70,57 @@ steps:
 
       echo
       echo "=== APK keys ==="
-      ls -l keys/
+      ls -lh keys/IceG-apkpub.pem
 
 
   # ============================================================
-  # 3. ADD APN-WEB
+  # DOWNLOAD APN-WEB
   # ============================================================
-  - name: Add apn-web
+  - name: Add APN Web
     shell: bash
     run: |
-      set -e
+      set -eu
 
-      mkdir -p apn-package
+      cd "$IB_DIR"
+
       mkdir -p files
+      mkdir -p /tmp/apn-web
+
+      APN_URL="https://raw.githubusercontent.com/ilblogdicristiangallo/apn-web-html_ipk/main/apn-web-1.0.3-r1.apk"
 
       wget -q \
-        https://github.com/ilblogdicristiangallo/apn-web-html_ipk/raw/refs/heads/main/apn-web-1.0.3-r1.apk \
-        -O apn-package/apn-web.apk
+        "$APN_URL" \
+        -O /tmp/apn-web/apn-web.apk
 
-      echo "Downloaded apn-web:"
-      ls -lh apn-package/apn-web.apk
+      if [ ! -s /tmp/apn-web/apn-web.apk ]; then
+        echo "ERROR: apn-web APK download failed"
+        exit 1
+      fi
 
-      mkdir -p apn-extract
+      echo "APN package downloaded:"
+      ls -lh /tmp/apn-web/apn-web.apk
 
-      tar -xOf apn-package/apn-web.apk data.tar.gz \
-        | tar -xz -C apn-extract
+      mkdir -p /tmp/apn-web/extracted
 
-      cp -a apn-extract/. files/
+      tar -xOf \
+        /tmp/apn-web/apn-web.apk \
+        data.tar.gz \
+        | tar -xz -C /tmp/apn-web/extracted
+
+      cp -a /tmp/apn-web/extracted/. files/
 
       echo
-      echo "=== apn-web files ==="
-      find apn-extract -maxdepth 4 -type f | sort
+      echo "=== APN files installed into FILES ==="
+      find files -type f | sort
 
 
   # ============================================================
-  # 4. PREPARE CUSTOM CONFIGURATION
+  # PREPARE CUSTOM FILES
   # ============================================================
   - name: Prepare custom configuration
     shell: bash
     run: |
-      set -e
+      set -eu
 
       cd "$IB_DIR"
 
@@ -109,7 +132,7 @@ steps:
 
 
       # ========================================================
-      # WIFI + GUEST + FIREWALL
+      # WIFI / GUEST / FIREWALL
       # ========================================================
       cat > files/etc/uci-defaults/99-mf286d-custom <<'EOF'
       #!/bin/sh
@@ -120,10 +143,13 @@ steps:
       uci set wireless.radio0.country='IT' 2>/dev/null || true
       uci set wireless.radio1.country='IT' 2>/dev/null || true
 
-      # Disable existing Wi-Fi interfaces.
+
+      # --------------------------------------------------------
+      # DISABLE EXISTING WIFI INTERFACES
+      # --------------------------------------------------------
       for section in $(uci show wireless 2>/dev/null | \
-          sed -n "s/^wireless\.[^=]*=wifi-iface$/\1/p"); do
-          uci set wireless.$section.disabled='1'
+          sed -n 's/^wireless\.[^=]*=wifi-iface$/\1/p'); do
+          uci set wireless."$section".disabled='1'
       done
 
 
@@ -204,7 +230,7 @@ steps:
 
 
       # --------------------------------------------------------
-      # GUEST FIREWALL ZONE
+      # GUEST FIREWALL
       # --------------------------------------------------------
       uci add firewall zone
       uci set firewall.@zone[-1].name='guest'
@@ -214,7 +240,7 @@ steps:
       uci set firewall.@zone[-1].forward='REJECT'
 
 
-      # Guest -> Internet
+      # Guest -> WAN
       uci add firewall forwarding
       uci set firewall.@forwarding[-1].src='guest'
       uci set firewall.@forwarding[-1].dest='wan'
@@ -238,7 +264,7 @@ steps:
       uci set firewall.@rule[-1].target='ACCEPT'
 
 
-      # Explicitly block Guest -> LAN
+      # Block access to LAN
       uci add firewall rule
       uci set firewall.@rule[-1].name='Guest-Block-LAN'
       uci set firewall.@rule[-1].src='guest'
@@ -276,7 +302,7 @@ steps:
 
 
       # ========================================================
-      # USB STORAGE MOUNT
+      # USB STORAGE
       # ========================================================
       cat > files/etc/init.d/usb-storage-mount <<'EOF'
       #!/bin/sh /etc/rc.common
@@ -291,7 +317,7 @@ steps:
           for DEV in /dev/sd[a-z][0-9]; do
               if [ -b "$DEV" ]; then
                   if ! mountpoint -q /mnt/usb; then
-                      mount "$DEV" /mnt/usb 2>/dev/null
+                      mount "$DEV" /mnt/usb 2>/dev/null || true
 
                       if mountpoint -q /mnt/usb; then
                           logger -t usb-storage \
@@ -314,7 +340,7 @@ steps:
 
 
       # ========================================================
-      # LTE WATCHDOG INIT
+      # LTE WATCHDOG SERVICE
       # ========================================================
       cat > files/etc/init.d/lte-watchdog <<'EOF'
       #!/bin/sh /etc/rc.common
@@ -336,12 +362,10 @@ steps:
       # ========================================================
       # LTE WATCHDOG
       #
-      # 2 failures = WAN reconnect
-      # 4 failures = ModemManager restart
-      # 6 failures = modem reset
-      # 8 failures = router reboot
-      #
-      # Check every 60 seconds.
+      # 2 failures -> WAN reconnect
+      # 4 failures -> ModemManager restart
+      # 6 failures -> modem reset
+      # 8 failures -> router reboot
       # ========================================================
       cat > files/usr/bin/lte-watchdog <<'EOF'
       #!/bin/sh
@@ -349,7 +373,7 @@ steps:
       STATE="/tmp/lte-watchdog.fail"
       FAIL=0
 
-      [ -f "$STATE" ] && FAIL=$(cat "$STATE" 2>/dev/null)
+      [ -f "$STATE" ] && FAIL="$(cat "$STATE" 2>/dev/null || echo 0)"
 
       while true; do
 
@@ -357,17 +381,13 @@ steps:
           DNS_OK=0
 
 
-          # ----------------------------------------------------
-          # Internet connectivity
-          # ----------------------------------------------------
+          # Internet test
           if ping -c 2 -W 5 1.1.1.1 >/dev/null 2>&1; then
               IP_OK=1
           fi
 
 
-          # ----------------------------------------------------
-          # DNS connectivity
-          # ----------------------------------------------------
+          # DNS test
           if nslookup openwrt.org 1.1.1.1 >/dev/null 2>&1; then
               DNS_OK=1
           fi
@@ -393,7 +413,7 @@ steps:
 
 
               # ------------------------------------------------
-              # RECOVERY 1: WAN reconnect
+              # RECOVERY 1
               # ------------------------------------------------
               if [ "$FAIL" -eq 2 ]; then
 
@@ -407,7 +427,7 @@ steps:
 
 
               # ------------------------------------------------
-              # RECOVERY 2: ModemManager restart
+              # RECOVERY 2
               # ------------------------------------------------
               if [ "$FAIL" -eq 4 ]; then
 
@@ -422,7 +442,7 @@ steps:
 
 
               # ------------------------------------------------
-              # RECOVERY 3: MODEM RESET
+              # RECOVERY 3
               # ------------------------------------------------
               if [ "$FAIL" -eq 6 ]; then
 
@@ -431,11 +451,11 @@ steps:
 
                   if command -v mmcli >/dev/null 2>&1; then
 
-                      MODEM_ID=$(
+                      MODEM_ID="$(
                           mmcli -L 2>/dev/null |
                           sed -n 's#.*Modem/[0-9]*.*#\1#p' |
-                          head -n1
-                      )
+                          head -n 1
+                      )"
 
                       if [ -n "$MODEM_ID" ]; then
 
@@ -446,18 +466,13 @@ steps:
                               >/dev/null 2>&1 || true
 
                           sleep 60
-
-                      else
-
-                          logger -t lte-watchdog \
-                              "No ModemManager modem found"
                       fi
                   fi
               fi
 
 
               # ------------------------------------------------
-              # RECOVERY 4: ROUTER REBOOT
+              # RECOVERY 4
               # ------------------------------------------------
               if [ "$FAIL" -ge 8 ]; then
 
@@ -466,7 +481,6 @@ steps:
 
                   reboot
               fi
-
           fi
 
           sleep 60
@@ -480,7 +494,7 @@ steps:
       # ENABLE SERVICES
       # ========================================================
       cat > files/etc/uci-defaults/100-mf286d-services <<'EOF'
-      # Enable custom services.
+      #!/bin/sh
 
       /etc/init.d/usb-storage-mount enable 2>/dev/null || true
       /etc/init.d/lte-watchdog enable 2>/dev/null || true
@@ -492,62 +506,49 @@ steps:
 
 
   # ============================================================
-  # 5. BUILD PACKAGE LIST
+  # PACKAGE LIST
   # ============================================================
-  - name: Build package list
+  - name: Prepare package list
     shell: bash
     run: |
-      set -e
+      set -eu
 
       cd "$IB_DIR"
 
       cat > /tmp/packages.txt <<'EOF'
       luci
       luci-ssl
-
       luci-proto-qmi
       luci-proto-mbim
       luci-proto-modemmanager
-
       modemmanager
       uqmi
       umbim
       libqmi
-
       usb-modeswitch
-
       kmod-usb-net-qmi-wwan
       kmod-usb-net-cdc-mbim
       kmod-usb-wdm
-
       kmod-usb-serial
       kmod-usb-serial-option
       kmod-usb-serial-wwan
-
       wireguard-tools
       kmod-wireguard
       luci-proto-wireguard
-
       openvpn-openssl
       luci-app-openvpn
-
       kmod-usb-storage
       block-mount
       kmod-fs-ext4
       kmod-fs-vfat
-
       samba4-server
       luci-app-samba4
-
       curl
       wget-ssl
       ca-bundle
       jq
       tcpdump
-
-      # 4IceG
-      luci-app-3ginfo-lite
-      luci-app-sms-tool-js
+      luci-app-modemdata
       luci-app-sms-manager
       EOF
 
@@ -556,50 +557,62 @@ steps:
       echo "PACKAGES=$PACKAGES" >> "$GITHUB_ENV"
 
       echo
-      echo "=== Requested packages ==="
+      echo "=== PACKAGES ==="
       cat /tmp/packages.txt
 
 
   # ============================================================
-  # 6. VERIFY 4ICEG REPOSITORY
+  # VERIFY REQUIRED 4ICEG PACKAGES ARE IN THE REPOSITORY
   # ============================================================
-  - name: Verify 4IceG repository
+  - name: Verify 4IceG packages
     shell: bash
     run: |
-      set -e
+      set -eu
 
       cd "$IB_DIR"
+
+      REPO_URL="https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb"
 
       wget -q \
-        https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb \
+        "$REPO_URL" \
         -O /tmp/4iceg-packages.adb
 
-      test -s /tmp/4iceg-packages.adb
+      if [ ! -s /tmp/4iceg-packages.adb ]; then
+        echo "ERROR: 4IceG package index is empty"
+        exit 1
+      fi
 
-      echo "4IceG packages.adb downloaded successfully."
-      ls -lh /tmp/4iceg-packages.adb
+      echo "4IceG repository index downloaded."
 
-      echo
-      echo "Using the original signed 4IceG repository."
-      echo "No locally generated unsigned packages.adb is created."
+      for PKG in \
+        luci-app-modemdata \
+        luci-app-sms-manager
+      do
+        if ! grep -q "\"$PKG\"" /tmp/4iceg-packages.adb; then
+          echo "ERROR: package not found in 4IceG repository: $PKG"
+          exit 1
+        fi
+
+        echo "OK: $PKG"
+      done
 
 
   # ============================================================
-  # 7. CHECK PACKAGE RESOLUTION
+  # TEST PACKAGE RESOLUTION
   # ============================================================
-  - name: Check ImageBuilder package resolution
+  - name: Check package resolution
     shell: bash
     run: |
-      set -e
+      set -eu
 
       cd "$IB_DIR"
 
       echo
-      echo "=== IMAGEBUILDER INFORMATION ==="
+      echo "=== IMAGEBUILDER INFO ==="
       make info
 
       echo
-      echo "=== PACKAGE RESOLUTION TEST ==="
+      echo "=== PACKAGE RESOLUTION ==="
 
       make manifest \
         PROFILE="zte_mf286d" \
@@ -609,12 +622,12 @@ steps:
 
 
   # ============================================================
-  # 8. BUILD FINAL SYSUPGRADE IMAGE
+  # BUILD FIRMWARE
   # ============================================================
   - name: Build MF286D firmware
     shell: bash
     run: |
-      set -e
+      set -eu
 
       cd "$IB_DIR"
 
@@ -627,41 +640,41 @@ steps:
 
 
   # ============================================================
-  # 9. VERIFY FIRMWARE
+  # VERIFY IMAGE
   # ============================================================
   - name: Verify firmware
     shell: bash
     run: |
-      set -e
+      set -eu
 
       cd "$IB_DIR"
 
       echo
-      echo "=== GENERATED IMAGES ==="
+      echo "=== GENERATED FILES ==="
 
       find bin/targets/ipq40xx/generic \
         -maxdepth 1 \
         -type f \
-        -print \
-        -exec ls -lh {} \;
+        -print
 
 
       IMAGE="$(
         find bin/targets/ipq40xx/generic \
+          -maxdepth 1 \
           -type f \
           -name '*zte_mf286d*squashfs-sysupgrade.bin' \
-          | head -n1
+          | head -n 1
       )"
 
 
       if [ -z "$IMAGE" ]; then
-        echo "ERROR: MF286D sysupgrade image was not generated."
+        echo "ERROR: sysupgrade image not found"
         exit 1
       fi
 
 
       echo
-      echo "=== SUCCESS ==="
+      echo "=== FINAL IMAGE ==="
       echo "$IMAGE"
 
 
@@ -676,12 +689,12 @@ steps:
 
 
   # ============================================================
-  # 10. SHOW FINAL MANIFEST
+  # FINAL MANIFEST
   # ============================================================
   - name: Show final manifest
     shell: bash
     run: |
-      set -e
+      set -eu
 
       cd "$IB_DIR"
 
@@ -696,9 +709,9 @@ steps:
 
 
   # ============================================================
-  # 11. UPLOAD FIRMWARE
+  # UPLOAD SYSUPGRADE
   # ============================================================
-  - name: Upload firmware artifact
+  - name: Upload firmware
     uses: actions/upload-artifact@v4
     with:
       name: MF286D-OpenWrt-25.12.4-FULL

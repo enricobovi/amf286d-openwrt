@@ -33,7 +33,6 @@ jobs:
           uci set wireless.radio0.country='IT'
           uci set wireless.radio1.country='IT'
 
-          # Disable default WiFi interfaces
           for section in $(uci show wireless | sed -n "s/^wireless\.\([^=]*\)=wifi-iface$/\1/p"); do
               uci set wireless.$section.disabled='1'
           done
@@ -124,6 +123,12 @@ jobs:
           uci set firewall.@rule[-1].dest_port='53'
           uci set firewall.@rule[-1].target='ACCEPT'
 
+          uci add firewall rule
+          uci set firewall.@rule[-1].name='Block-Guest-LAN'
+          uci set firewall.@rule[-1].src='guest'
+          uci set firewall.@rule[-1].dest='lan'
+          uci set firewall.@rule[-1].target='REJECT'
+
           uci commit firewall
 
           exit 0
@@ -144,7 +149,7 @@ jobs:
               option interface 'lan'
 
           config sambashare
-              option name 'USB'
+              option name 'Home'
               option path '/mnt/usb'
               option read_only 'no'
               option guest_ok 'yes'
@@ -210,29 +215,23 @@ jobs:
               IP_OK=0
               DNS_OK=0
 
-              # Internet test
               if ping -c 2 -W 5 1.1.1.1 >/dev/null 2>&1; then
                   IP_OK=1
               fi
 
-              # DNS test
               if nslookup openwrt.org 1.1.1.1 >/dev/null 2>&1; then
                   DNS_OK=1
               fi
 
               if [ "$IP_OK" = "1" ] && [ "$DNS_OK" = "1" ]; then
-
                   FAIL=0
                   echo 0 > "$STATE"
-
               else
-
                   FAIL=$((FAIL + 1))
                   echo "$FAIL" > "$STATE"
 
                   logger -t lte-watchdog "Internet/LTE failure $FAIL"
 
-                  # LEVEL 1: WAN reconnect
                   if [ "$FAIL" -eq 2 ]; then
                       logger -t lte-watchdog "Recovery 1: WAN reconnect"
                       ifdown wan 2>/dev/null
@@ -240,14 +239,12 @@ jobs:
                       ifup wan 2>/dev/null
                   fi
 
-                  # LEVEL 2: ModemManager restart
                   if [ "$FAIL" -eq 4 ]; then
                       logger -t lte-watchdog "Recovery 2: ModemManager restart"
                       /etc/init.d/modemmanager restart 2>/dev/null
                       sleep 45
                   fi
 
-                  # LEVEL 3: modem reset
                   if [ "$FAIL" -eq 6 ]; then
                       logger -t lte-watchdog "Recovery 3: modem reset"
 
@@ -261,12 +258,10 @@ jobs:
                       fi
                   fi
 
-                  # LEVEL 4: complete router reboot
                   if [ "$FAIL" -ge 8 ]; then
                       logger -t lte-watchdog "LTE recovery failed - rebooting router"
                       reboot
                   fi
-
               fi
 
               sleep 60
@@ -274,34 +269,6 @@ jobs:
           EOF
 
           chmod +x files/usr/bin/lte-watchdog
-
-      # ============================================================
-      # DOWNLOAD 4ICEG / APN APK REPOSITORIES
-      # ============================================================
-
-      - name: Prepare custom APK repositories
-        run: |
-
-          IB="openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64"
-
-          mkdir -p "$IB/packages"
-
-          # Download repository indexes
-          wget -q \
-            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb \
-            -O "$IB/packages/iceg-packages.adb"
-
-          wget -q \
-            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem \
-            -O "$IB/packages/IceG-apkpub.pem"
-
-          # Download APN repository index if available
-          wget -q \
-            https://github.com/ilblogdicristiangallo/apn-web-html_ipk/raw/refs/heads/main/packages.adb \
-            -O "$IB/packages/apn-packages.adb" || true
-
-          echo "Custom APK files:"
-          ls -lh "$IB/packages/"
 
       # ============================================================
       # BUILD

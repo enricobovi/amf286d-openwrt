@@ -1,448 +1,447 @@
 name: Build MF286D OpenWrt 25.12.4
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-build:
-runs-on: ubuntu-24.04
+  build:
+    runs-on: ubuntu-24.04
 
-steps:
-  - name: Checkout
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  - name: Install build dependencies
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y \
-        build-essential \
-        clang \
-        flex \
-        bison \
-        gawk \
-        gettext \
-        git \
-        libncurses-dev \
-        libssl-dev \
-        python3 \
-        python3-setuptools \
-        rsync \
-        unzip \
-        wget \
-        zstd \
-        file \
-        time
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            gawk \
+            gettext \
+            git \
+            libncurses-dev \
+            libssl-dev \
+            python3 \
+            python3-setuptools \
+            rsync \
+            unzip \
+            wget \
+            zstd \
+            file \
+            time
 
-  - name: Download OpenWrt ImageBuilder
-    run: |
-      wget -q https://downloads.openwrt.org/releases/25.12.4/targets/ipq40xx/generic/openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
-      tar --zstd -xf openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
-      echo "IB=$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-*' | head -n 1)" >> "$GITHUB_ENV"
+      - name: Download OpenWrt ImageBuilder
+        run: |
+          wget -q https://downloads.openwrt.org/releases/25.12.4/targets/ipq40xx/generic/openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+          tar --zstd -xf openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+          echo "IB=$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-*' | head -n 1)" >> "$GITHUB_ENV"
 
-  - name: Configure 4IceG APK repository
-    working-directory: ${{ env.IB }}
-    run: |
-      wget -q \
-        https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem \
-        -O keys/IceG-apkpub.pem
+      - name: Configure 4IceG repository
+        working-directory: ${{ env.IB }}
+        run: |
+          mkdir -p keys
 
-      echo "https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb" >> repositories
+          wget -q \
+            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem \
+            -O keys/IceG-apkpub.pem
 
-  - name: Download APN Web APK
-    working-directory: ${{ env.IB }}
-    run: |
-      mkdir -p custom-apk
+          echo "https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb" >> repositories
 
-      wget -q \
-        https://github.com/ilblogdicristiangallo/apn-web-html_ipk/raw/refs/heads/main/apn-web-1.0.3-r1.apk \
-        -O custom-apk/apn-web.apk
+      - name: Download APN Web
+        working-directory: ${{ env.IB }}
+        run: |
+          mkdir -p packages
 
-  - name: Prepare custom files
-    working-directory: ${{ env.IB }}
-    run: |
-      mkdir -p files/etc/config
-      mkdir -p files/etc/init.d
-      mkdir -p files/usr/bin
-      mkdir -p files/etc/apk/repositories.d
-      mkdir -p files/etc/apk/keys
-      mkdir -p files/mnt/usb
+          wget -q \
+            https://github.com/ilblogdicristiangallo/apn-web-html_ipk/raw/refs/heads/main/apn-web-1.0.3-r1.apk \
+            -O packages/apn-web.apk
 
-      cp keys/IceG-apkpub.pem files/etc/apk/keys/IceG-apkpub.pem
+      - name: Create custom configuration
+        working-directory: ${{ env.IB }}
+        run: |
+          mkdir -p files/etc/config
+          mkdir -p files/etc/init.d
+          mkdir -p files/usr/bin
+          mkdir -p files/etc/apk/repositories.d
+          mkdir -p files/etc/apk/keys
+          mkdir -p files/mnt/usb
 
-      cat > files/etc/apk/repositories.d/customfeeds.list <<'EOF'
-      https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb
-      EOF
+          cp keys/IceG-apkpub.pem \
+            files/etc/apk/keys/IceG-apkpub.pem
 
-      cat > files/etc/config/wireless <<'EOF'
-      config wifi-device 'radio0'
-          option type 'mac80211'
-          option path 'platform/soc@0/c000000.wifi'
-          option band '2g'
-          option htmode 'HT20'
-          option country 'IT'
-          option channel 'auto'
+          cat > files/etc/apk/repositories.d/customfeeds.list <<'EOF'
+          https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb
+          EOF
 
-      config wifi-iface 'main_2g'
-          option device 'radio0'
-          option mode 'ap'
-          option ssid 'MF286D-MAIN'
-          option encryption 'sae-mixed'
-          option key 'Mf286D-ChangeMe!2026'
-          option network 'lan'
+          cat > files/etc/config/wireless <<'EOF'
+          config wifi-device 'radio0'
+              option type 'mac80211'
+              option path 'platform/soc@0/c000000.wifi'
+              option band '2g'
+              option htmode 'HT20'
+              option country 'IT'
+              option channel 'auto'
 
-      config wifi-iface 'guest_2g'
-          option device 'radio0'
-          option mode 'ap'
-          option ssid 'MF286D-GUEST'
-          option encryption 'sae-mixed'
-          option key 'Mf286D-Guest!2026'
-          option network 'guest'
+          config wifi-iface 'main_2g'
+              option device 'radio0'
+              option mode 'ap'
+              option ssid 'MF286D-MAIN'
+              option encryption 'sae-mixed'
+              option key 'Mf286D-ChangeMe!2026'
+              option network 'lan'
 
-      config wifi-device 'radio1'
-          option type 'mac80211'
-          option path 'platform/soc@0/c000000.wifi+1'
-          option band '5g'
-          option htmode 'VHT80'
-          option country 'IT'
-          option channel 'auto'
+          config wifi-iface 'guest_2g'
+              option device 'radio0'
+              option mode 'ap'
+              option ssid 'MF286D-GUEST'
+              option encryption 'sae-mixed'
+              option key 'Mf286D-Guest!2026'
+              option network 'guest'
 
-      config wifi-iface 'main_5g'
-          option device 'radio1'
-          option mode 'ap'
-          option ssid 'MF286D-MAIN'
-          option encryption 'sae-mixed'
-          option key 'Mf286D-ChangeMe!2026'
-          option network 'lan'
+          config wifi-device 'radio1'
+              option type 'mac80211'
+              option path 'platform/soc@0/c000000.wifi+1'
+              option band '5g'
+              option htmode 'VHT80'
+              option country 'IT'
+              option channel 'auto'
 
-      config wifi-iface 'guest_5g'
-          option device 'radio1'
-          option mode 'ap'
-          option ssid 'MF286D-GUEST'
-          option encryption 'sae-mixed'
-          option key 'Mf286D-Guest!2026'
-          option network 'guest'
-      EOF
+          config wifi-iface 'main_5g'
+              option device 'radio1'
+              option mode 'ap'
+              option ssid 'MF286D-MAIN'
+              option encryption 'sae-mixed'
+              option key 'Mf286D-ChangeMe!2026'
+              option network 'lan'
 
-      cat > files/etc/config/network <<'EOF'
-      config interface 'loopback'
-          option device 'lo'
-          option proto 'static'
-          option ipaddr '127.0.0.1'
-          option netmask '255.0.0.0'
+          config wifi-iface 'guest_5g'
+              option device 'radio1'
+              option mode 'ap'
+              option ssid 'MF286D-GUEST'
+              option encryption 'sae-mixed'
+              option key 'Mf286D-Guest!2026'
+              option network 'guest'
+          EOF
 
-      config device
-          option name 'br-lan'
-          option type 'bridge'
-          list ports 'lan2'
-          list ports 'lan3'
-          list ports 'lan4'
+          cat > files/etc/config/network <<'EOF'
+          config interface 'loopback'
+              option device 'lo'
+              option proto 'static'
+              option ipaddr '127.0.0.1'
+              option netmask '255.0.0.0'
 
-      config interface 'lan'
-          option device 'br-lan'
-          option proto 'static'
-          option ipaddr '192.168.1.1'
-          option netmask '255.255.255.0'
+          config device
+              option name 'br-lan'
+              option type 'bridge'
+              list ports 'lan2'
+              list ports 'lan3'
+              list ports 'lan4'
 
-      config interface 'guest'
-          option proto 'static'
-          option ipaddr '192.168.50.1'
-          option netmask '255.255.255.0'
+          config interface 'lan'
+              option device 'br-lan'
+              option proto 'static'
+              option ipaddr '192.168.1.1'
+              option netmask '255.255.255.0'
 
-      config interface 'wan'
-          option proto 'modemmanager'
-          option device '/sys/class/net/wwan0'
-          option apn 'internet'
-          option iptype 'ipv4'
-      EOF
+          config interface 'guest'
+              option proto 'static'
+              option ipaddr '192.168.50.1'
+              option netmask '255.255.255.0'
 
-      cat > files/etc/config/dhcp <<'EOF'
-      config dnsmasq
-          option domainneeded '1'
-          option boguspriv '1'
-          option filterwin2k '0'
-          option localise_queries '1'
-          option rebind_protection '1'
-          option local '/lan/'
-          option domain 'lan'
-          option expandhosts '1'
-          option cachesize '1000'
-          option authoritative '1'
-          option readethers '1'
-          option leasefile '/tmp/dhcp.leases'
-          option resolvfile '/tmp/resolv.conf.d/resolv.conf.auto'
+          config interface 'wan'
+              option proto 'modemmanager'
+              option device '/sys/class/net/wwan0'
+              option apn 'internet'
+              option iptype 'ipv4'
+          EOF
 
-      config dhcp 'lan'
-          option interface 'lan'
-          option start '100'
-          option limit '150'
-          option leasetime '12h'
+          cat > files/etc/config/dhcp <<'EOF'
+          config dnsmasq
+              option domainneeded '1'
+              option boguspriv '1'
+              option filterwin2k '0'
+              option localise_queries '1'
+              option rebind_protection '1'
+              option local '/lan/'
+              option domain 'lan'
+              option expandhosts '1'
+              option authoritative '1'
+              option readethers '1'
+              option leasefile '/tmp/dhcp.leases'
+              option resolvfile '/tmp/resolv.conf.d/resolv.conf.auto'
 
-      config dhcp 'guest'
-          option interface 'guest'
-          option start '100'
-          option limit '100'
-          option leasetime '12h'
-      EOF
+          config dhcp 'lan'
+              option interface 'lan'
+              option start '100'
+              option limit '150'
+              option leasetime '12h'
 
-      cat > files/etc/config/firewall <<'EOF'
-      config defaults
-          option syn_flood '1'
-          option input 'REJECT'
-          option output 'ACCEPT'
-          option forward 'REJECT'
+          config dhcp 'guest'
+              option interface 'guest'
+              option start '100'
+              option limit '100'
+              option leasetime '12h'
+          EOF
 
-      config zone
-          option name 'lan'
-          list network 'lan'
-          option input 'ACCEPT'
-          option output 'ACCEPT'
-          option forward 'ACCEPT'
+          cat > files/etc/config/firewall <<'EOF'
+          config defaults
+              option syn_flood '1'
+              option input 'REJECT'
+              option output 'ACCEPT'
+              option forward 'REJECT'
 
-      config zone
-          option name 'guest'
-          list network 'guest'
-          option input 'REJECT'
-          option output 'ACCEPT'
-          option forward 'REJECT'
+          config zone
+              option name 'lan'
+              list network 'lan'
+              option input 'ACCEPT'
+              option output 'ACCEPT'
+              option forward 'ACCEPT'
 
-      config zone
-          option name 'wan'
-          list network 'wan'
-          option input 'REJECT'
-          option output 'ACCEPT'
-          option forward 'REJECT'
-          option masq '1'
-          option mtu_fix '1'
+          config zone
+              option name 'guest'
+              list network 'guest'
+              option input 'REJECT'
+              option output 'ACCEPT'
+              option forward 'REJECT'
 
-      config forwarding
-          option src 'lan'
-          option dest 'wan'
+          config zone
+              option name 'wan'
+              list network 'wan'
+              option input 'REJECT'
+              option output 'ACCEPT'
+              option forward 'REJECT'
+              option masq '1'
+              option mtu_fix '1'
 
-      config forwarding
-          option src 'guest'
-          option dest 'wan'
+          config forwarding
+              option src 'lan'
+              option dest 'wan'
 
-      config rule
-          option name 'Guest-DHCP'
-          option src 'guest'
-          option proto 'udp'
-          option dest_port '67-68'
-          option target 'ACCEPT'
+          config forwarding
+              option src 'guest'
+              option dest 'wan'
 
-      config rule
-          option name 'Guest-DNS'
-          option src 'guest'
-          option proto 'tcp udp'
-          option dest_port '53'
-          option target 'ACCEPT'
+          config rule
+              option name 'Guest-DHCP'
+              option src 'guest'
+              option proto 'udp'
+              option dest_port '67-68'
+              option target 'ACCEPT'
 
-      config rule
-          option name 'Block-Guest-LAN'
-          option src 'guest'
-          option dest 'lan'
-          option target 'REJECT'
-      EOF
+          config rule
+              option name 'Guest-DNS'
+              option src 'guest'
+              option proto 'tcp udp'
+              option dest_port '53'
+              option target 'ACCEPT'
 
-      cat > files/etc/config/samba4 <<'EOF'
-      config samba
-          option name 'MF286D'
-          option workgroup 'WORKGROUP'
-          option description 'MF286D USB Storage'
-          option interface 'lan'
+          config rule
+              option name 'Block-Guest-LAN'
+              option src 'guest'
+              option dest 'lan'
+              option target 'REJECT'
+          EOF
 
-      config sambashare
-          option name 'Home'
-          option path '/mnt/usb'
-          option read_only 'no'
-          option guest_ok 'yes'
-          option create_mask '0666'
-          option dir_mask '0777'
-      EOF
+          cat > files/etc/config/samba4 <<'EOF'
+          config samba
+              option name 'MF286D'
+              option workgroup 'WORKGROUP'
+              option description 'MF286D USB Storage'
+              option interface 'lan'
 
-      cat > files/etc/init.d/usb-storage <<'EOF'
-      #!/bin/sh /etc/rc.common
-      START=99
+          config sambashare
+              option name 'Home'
+              option path '/mnt/usb'
+              option read_only 'no'
+              option guest_ok 'yes'
+              option create_mask '0666'
+              option dir_mask '0777'
+          EOF
 
-      start() {
-          sleep 10
+          cat > files/etc/init.d/usb-storage <<'EOF'
+          #!/bin/sh /etc/rc.common
 
-          mkdir -p /mnt/usb
+          START=99
 
-          for dev in /dev/sd[a-z][0-9]; do
-              [ -b "$dev" ] || continue
-
-              mount "$dev" /mnt/usb 2>/dev/null && {
-                  logger -t usb-storage "USB mounted: $dev -> /mnt/usb"
-                  return 0
-              }
-          done
-
-          logger -t usb-storage "No USB storage mounted"
-      }
-
-      stop() {
-          umount /mnt/usb 2>/dev/null || true
-      }
-      EOF
-
-      chmod +x files/etc/init.d/usb-storage
-
-      cat > files/usr/bin/mf286d-watchdog <<'EOF'
-      #!/bin/sh
-
-      STATE="/tmp/mf286d-watchdog.failures"
-      LOGTAG="mf286d-watchdog"
-
-      FAIL=0
-      [ -f "$STATE" ] && FAIL="$(cat "$STATE" 2>/dev/null)"
-
-      check_internet() {
-          nslookup openwrt.org 1.1.1.1 >/dev/null 2>&1
-      }
-
-      if check_internet; then
-          FAIL=0
-          echo "$FAIL" > "$STATE"
-          logger -t "$LOGTAG" "Internet OK"
-          exit 0
-      fi
-
-      FAIL=$((FAIL + 1))
-      echo "$FAIL" > "$STATE"
-      logger -t "$LOGTAG" "Internet failure #$FAIL"
-
-      case "$FAIL" in
-          2)
-              logger -t "$LOGTAG" "Failure 2: reconnect WAN"
-              ifdown wan 2>/dev/null
-              sleep 5
-              ifup wan 2>/dev/null
-              ;;
-          4)
-              logger -t "$LOGTAG" "Failure 4: restart ModemManager"
-              /etc/init.d/modemmanager restart 2>/dev/null
-              ;;
-          6)
-              logger -t "$LOGTAG" "Failure 6: modem reset"
-              ubus call modemmanager reset 2>/dev/null || true
+          start() {
               sleep 10
-              ;;
-          8)
-              logger -t "$LOGTAG" "Failure 8: reboot router"
-              reboot
-              ;;
-      esac
-      EOF
 
-      chmod +x files/usr/bin/mf286d-watchdog
+              mkdir -p /mnt/usb
 
-      cat > files/etc/init.d/mf286d-watchdog <<'EOF'
-      #!/bin/sh /etc/rc.common
-      START=98
+              for dev in /dev/sd[a-z][0-9]; do
+                  [ -b "$dev" ] || continue
 
-      start() {
-          rm -f /tmp/mf286d-watchdog.failures
+                  mount "$dev" /mnt/usb 2>/dev/null && {
+                      logger -t usb-storage "USB mounted: $dev -> /mnt/usb"
+                      return 0
+                  }
+              done
 
-          while true; do
-              /usr/bin/mf286d-watchdog
-              sleep 60
-          done &
-      }
+              logger -t usb-storage "No USB storage mounted"
+          }
 
-      stop() {
-          killall mf286d-watchdog 2>/dev/null || true
-      }
-      EOF
+          stop() {
+              umount /mnt/usb 2>/dev/null || true
+          }
+          EOF
 
-      chmod +x files/etc/init.d/mf286d-watchdog
+          chmod +x files/etc/init.d/usb-storage
 
-      cat > files/etc/config/ucitrack <<'EOF'
-      config samba4
-          option init 'samba4'
-          list affects 'luci-app-samba4'
+          cat > files/usr/bin/mf286d-watchdog <<'EOF'
+          #!/bin/sh
 
-      config modemmanager
-          option init 'modemmanager'
-      EOF
+          STATE="/tmp/mf286d-watchdog.failures"
+          LOGTAG="mf286d-watchdog"
 
-  - name: Build firmware
-    working-directory: ${{ env.IB }}
-    env:
-      PACKAGES: >-
-        luci
-        luci-ssl
-        luci-app-firewall
-        luci-proto-qmi
-        luci-proto-mbim
-        luci-proto-modemmanager
-        modemmanager
-        uqmi
-        umbim
-        usb-modeswitch
-        kmod-usb-wdm
-        kmod-usb-net-qmi-wwan
-        kmod-usb-net-cdc-mbim
-        kmod-usb-serial
-        kmod-usb-serial-option
-        kmod-usb-serial-wwan
-        kmod-usb-storage
-        block-mount
-        mount-utils
-        e2fsprogs
-        kmod-fs-ext4
-        kmod-fs-vfat
-        samba4-server
-        luci-app-samba4
-        wireguard-tools
-        kmod-wireguard
-        luci-proto-wireguard
-        ca-bundle
-        wget-ssl
-        curl
-        jq
-        dnsmasq
-        ip-full
-        luci-app-modemdata
-        modemdata
-        luci-app-sms-manager
-        -luci-app-modemband
-        -modemband
-        -luci-app-3ginfo-lite
-        -luci-app-sms-tool-js
-    run: |
-      set -eux
+          FAIL=0
 
-      mkdir -p packages
+          [ -f "$STATE" ] && \
+              FAIL="$(cat "$STATE" 2>/dev/null)"
 
-      cp custom-apk/apn-web.apk packages/apn-web.apk
+          check_internet() {
+              nslookup openwrt.org 1.1.1.1 >/dev/null 2>&1
+          }
 
-      make manifest \
-        PROFILE="zte_mf286d" \
-        PACKAGES="$PACKAGES" \
-        STRIP_ABI=1
+          if check_internet; then
+              FAIL=0
+              echo "$FAIL" > "$STATE"
+              logger -t "$LOGTAG" "Internet OK"
+              exit 0
+          fi
 
-      make image \
-        PROFILE="zte_mf286d" \
-        PACKAGES="$PACKAGES apn-web" \
-        FILES="files" \
-        EXTRA_IMAGE_NAME="FULL-25.12.4" \
-        BIN_DIR="$GITHUB_WORKSPACE/bin"
+          FAIL=$((FAIL + 1))
+          echo "$FAIL" > "$STATE"
 
-  - name: Verify firmware
-    run: |
-      set -eux
+          logger -t "$LOGTAG" \
+              "Internet failure #$FAIL"
 
-      ls -lh bin/
+          case "$FAIL" in
+              2)
+                  logger -t "$LOGTAG" \
+                      "Failure 2: reconnect WAN"
 
-      test -n "$(find bin -type f -name '*zte_mf286d*squashfs-sysupgrade.bin' -print -quit)"
+                  ifdown wan 2>/dev/null
+                  sleep 5
+                  ifup wan 2>/dev/null
+                  ;;
 
-      echo "=== Firmware found ==="
-      find bin -type f -name '*zte_mf286d*squashfs-sysupgrade.bin' -print
+              4)
+                  logger -t "$LOGTAG" \
+                      "Failure 4: restart ModemManager"
 
-  - name: Upload firmware artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: MF286D-OpenWrt-25.12.4-FULL
-      path: bin/*zte_mf286d*squashfs-sysupgrade.bin
-      if-no-files-found: error
-      retention-days: 30
+                  /etc/init.d/modemmanager restart 2>/dev/null
+                  ;;
+
+              6)
+                  logger -t "$LOGTAG" \
+                      "Failure 6: modem reset"
+
+                  ubus call modemmanager reset \
+                      2>/dev/null || true
+
+                  sleep 10
+                  ;;
+
+              8)
+                  logger -t "$LOGTAG" \
+                      "Failure 8: reboot router"
+
+                  reboot
+                  ;;
+          esac
+          EOF
+
+          chmod +x files/usr/bin/mf286d-watchdog
+
+          cat > files/etc/init.d/mf286d-watchdog <<'EOF'
+          #!/bin/sh /etc/rc.common
+
+          START=98
+
+          start() {
+              rm -f /tmp/mf286d-watchdog.failures
+
+              while true; do
+                  /usr/bin/mf286d-watchdog
+                  sleep 60
+              done &
+          }
+
+          stop() {
+              killall mf286d-watchdog 2>/dev/null || true
+          }
+          EOF
+
+          chmod +x files/etc/init.d/mf286d-watchdog
+
+      - name: Build firmware
+        working-directory: ${{ env.IB }}
+        run: |
+          set -eux
+
+          PACKAGES="
+            luci
+            luci-ssl
+            luci-app-firewall
+            luci-proto-qmi
+            luci-proto-mbim
+            luci-proto-modemmanager
+            modemmanager
+            uqmi
+            umbim
+            usb-modeswitch
+            kmod-usb-wdm
+            kmod-usb-net-qmi-wwan
+            kmod-usb-net-cdc-mbim
+            kmod-usb-serial
+            kmod-usb-serial-option
+            kmod-usb-serial-wwan
+            kmod-usb-storage
+            block-mount
+            mount-utils
+            e2fsprogs
+            kmod-fs-ext4
+            kmod-fs-vfat
+            samba4-server
+            luci-app-samba4
+            wireguard-tools
+            kmod-wireguard
+            luci-proto-wireguard
+            ca-bundle
+            wget-ssl
+            curl
+            jq
+            dnsmasq
+            ip-full
+            luci-app-modemdata
+            modemdata
+            luci-app-sms-manager
+            apn-web
+          "
+
+          make image \
+            PROFILE="zte_mf286d" \
+            PACKAGES="$PACKAGES" \
+            FILES="files" \
+            EXTRA_IMAGE_NAME="FULL-25.12.4" \
+            BIN_DIR="$GITHUB_WORKSPACE/bin"
+
+      - name: Verify firmware
+        run: |
+          set -eux
+
+          echo "Firmware prodotti:"
+          find bin -type f -name '*zte_mf286d*squashfs-sysupgrade.bin' -print
+
+          test -n "$(find bin -type f -name '*zte_mf286d*squashfs-sysupgrade.bin' -print -quit)"
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: MF286D-OpenWrt-25.12.4-FULL
+          path: bin/*zte_mf286d*squashfs-sysupgrade.bin
+          if-no-files-found: error
+          retention-days: 30

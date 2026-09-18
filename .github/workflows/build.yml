@@ -10,7 +10,7 @@ jobs:
     steps:
 
       # ============================================================
-      # DOWNLOAD IMAGEBUILDER
+      # OPENWRT IMAGEBUILDER
       # ============================================================
 
       - name: Download OpenWrt ImageBuilder
@@ -19,42 +19,36 @@ jobs:
           tar --zstd -xf openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
 
       # ============================================================
-      # PREPARE CUSTOM FILES
+      # CUSTOM FILES
       # ============================================================
 
-      - name: Prepare custom configuration
+      - name: Prepare custom files
         run: |
 
           mkdir -p files/etc/uci-defaults
           mkdir -p files/etc/init.d
           mkdir -p files/usr/bin
-          mkdir -p files/etc/config
+          mkdir -p files/mnt/usb
 
           # ========================================================
-          # WIFI + GUEST NETWORK
+          # WIFI / MAIN / GUEST
           # ========================================================
 
           cat > files/etc/uci-defaults/99-mf286d-custom <<'EOF'
           #!/bin/sh
 
-          # --------------------------------------------------------
           # Country
-          # --------------------------------------------------------
-
           uci set wireless.radio0.country='IT'
           uci set wireless.radio1.country='IT'
 
-          # --------------------------------------------------------
-          # Disable existing WiFi interfaces
-          # --------------------------------------------------------
-
+          # Disable default WiFi interfaces
           for section in $(uci show wireless | sed -n "s/^wireless\.\([^=]*\)=wifi-iface$/\1/p"); do
               uci set wireless.$section.disabled='1'
           done
 
-          # --------------------------------------------------------
+          # ========================================================
           # MAIN 2.4 GHz
-          # --------------------------------------------------------
+          # ========================================================
 
           uci set wireless.main2g='wifi-iface'
           uci set wireless.main2g.device='radio0'
@@ -62,12 +56,12 @@ jobs:
           uci set wireless.main2g.network='lan'
           uci set wireless.main2g.ssid='MF286D-MAIN'
           uci set wireless.main2g.encryption='sae-mixed'
-          uci set wireless.main2g.key='CHANGE-ME-MAIN'
+          uci set wireless.main2g.key='Mf286D-ChangeMe!2026'
           uci set wireless.main2g.disabled='0'
 
-          # --------------------------------------------------------
+          # ========================================================
           # MAIN 5 GHz
-          # --------------------------------------------------------
+          # ========================================================
 
           uci set wireless.main5g='wifi-iface'
           uci set wireless.main5g.device='radio1'
@@ -75,31 +69,28 @@ jobs:
           uci set wireless.main5g.network='lan'
           uci set wireless.main5g.ssid='MF286D-MAIN'
           uci set wireless.main5g.encryption='sae-mixed'
-          uci set wireless.main5g.key='CHANGE-ME-MAIN'
+          uci set wireless.main5g.key='Mf286D-ChangeMe!2026'
           uci set wireless.main5g.disabled='0'
 
-          # --------------------------------------------------------
+          # ========================================================
           # GUEST NETWORK
-          # --------------------------------------------------------
+          # ========================================================
 
           uci set network.guest='interface'
           uci set network.guest.proto='static'
           uci set network.guest.ipaddr='192.168.50.1'
           uci set network.guest.netmask='255.255.255.0'
 
-          # --------------------------------------------------------
-          # GUEST DHCP
-          # --------------------------------------------------------
-
+          # Guest DHCP
           uci set dhcp.guest='dhcp'
           uci set dhcp.guest.interface='guest'
           uci set dhcp.guest.start='100'
           uci set dhcp.guest.limit='100'
           uci set dhcp.guest.leasetime='12h'
 
-          # --------------------------------------------------------
+          # ========================================================
           # GUEST 2.4 GHz
-          # --------------------------------------------------------
+          # ========================================================
 
           uci set wireless.guest2g='wifi-iface'
           uci set wireless.guest2g.device='radio0'
@@ -107,12 +98,12 @@ jobs:
           uci set wireless.guest2g.network='guest'
           uci set wireless.guest2g.ssid='MF286D-GUEST'
           uci set wireless.guest2g.encryption='sae-mixed'
-          uci set wireless.guest2g.key='CHANGE-ME-GUEST'
+          uci set wireless.guest2g.key='Mf286D-Guest!2026'
           uci set wireless.guest2g.disabled='0'
 
-          # --------------------------------------------------------
+          # ========================================================
           # GUEST 5 GHz
-          # --------------------------------------------------------
+          # ========================================================
 
           uci set wireless.guest5g='wifi-iface'
           uci set wireless.guest5g.device='radio1'
@@ -120,16 +111,16 @@ jobs:
           uci set wireless.guest5g.network='guest'
           uci set wireless.guest5g.ssid='MF286D-GUEST'
           uci set wireless.guest5g.encryption='sae-mixed'
-          uci set wireless.guest5g.key='CHANGE-ME-GUEST'
+          uci set wireless.guest5g.key='Mf286D-Guest!2026'
           uci set wireless.guest5g.disabled='0'
 
           uci commit wireless
           uci commit network
           uci commit dhcp
 
-          # --------------------------------------------------------
+          # ========================================================
           # GUEST FIREWALL
-          # --------------------------------------------------------
+          # ========================================================
 
           uci add firewall zone
           uci set firewall.@zone[-1].name='guest'
@@ -166,7 +157,7 @@ jobs:
           chmod +x files/etc/uci-defaults/99-mf286d-custom
 
           # ========================================================
-          # SAMBA CONFIG
+          # SAMBA
           # ========================================================
 
           cat > files/etc/config/samba4 <<'EOF'
@@ -187,10 +178,34 @@ jobs:
           EOF
 
           # ========================================================
-          # USB MOUNT DIRECTORY
+          # USB AUTO MOUNT
           # ========================================================
 
-          mkdir -p files/mnt/usb
+          cat > files/etc/init.d/usb-storage-mount <<'EOF'
+          #!/bin/sh /etc/rc.common
+
+          START=95
+          USE_PROCD=1
+
+          start_service() {
+              mkdir -p /mnt/usb
+
+              for DEV in /dev/sd[a-z][0-9]; do
+                  if [ -b "$DEV" ]; then
+                      mountpoint -q /mnt/usb && break
+
+                      mount "$DEV" /mnt/usb 2>/dev/null
+
+                      if mountpoint -q /mnt/usb; then
+                          logger -t usb-storage-mount "USB storage mounted: $DEV"
+                          break
+                      fi
+                  fi
+              done
+          }
+          EOF
+
+          chmod +x files/etc/init.d/usb-storage-mount
 
           # ========================================================
           # LTE WATCHDOG
@@ -216,7 +231,6 @@ jobs:
           #!/bin/sh
 
           STATE="/tmp/lte-watchdog.fail"
-          COOLDOWN="/tmp/lte-watchdog.recovery"
 
           FAIL=0
 
@@ -224,29 +238,24 @@ jobs:
 
           while true; do
 
-              # ----------------------------------------------------
-              # Check Internet by IP
-              # ----------------------------------------------------
-
               IP_OK=0
               DNS_OK=0
 
+              # Internet
               if ping -c 2 -W 5 1.1.1.1 >/dev/null 2>&1; then
                   IP_OK=1
               fi
 
-              # ----------------------------------------------------
-              # Check DNS
-              # ----------------------------------------------------
-
+              # DNS
               if nslookup openwrt.org 1.1.1.1 >/dev/null 2>&1; then
                   DNS_OK=1
               fi
 
               if [ "$IP_OK" = "1" ] && [ "$DNS_OK" = "1" ]; then
+
                   FAIL=0
                   echo 0 > "$STATE"
-                  logger -t lte-watchdog "LTE/Internet OK"
+
               else
 
                   FAIL=$((FAIL + 1))
@@ -255,7 +264,7 @@ jobs:
                   logger -t lte-watchdog "LTE/Internet failure $FAIL"
 
                   # ------------------------------------------------
-                  # Recovery 1 - WAN reconnect
+                  # LEVEL 1 - WAN reconnect
                   # ------------------------------------------------
 
                   if [ "$FAIL" -eq 2 ]; then
@@ -265,11 +274,11 @@ jobs:
                       sleep 10
                       ifup wan 2>/dev/null
 
-                      touch "$COOLDOWN"
+                      sleep 30
                   fi
 
                   # ------------------------------------------------
-                  # Recovery 2 - ModemManager
+                  # LEVEL 2 - ModemManager restart
                   # ------------------------------------------------
 
                   if [ "$FAIL" -eq 4 ]; then
@@ -277,18 +286,22 @@ jobs:
 
                       /etc/init.d/modemmanager restart 2>/dev/null
 
-                      sleep 30
+                      sleep 45
                   fi
 
                   # ------------------------------------------------
-                  # Recovery 3 - modem reset
+                  # LEVEL 3 - modem reset
                   # ------------------------------------------------
 
                   if [ "$FAIL" -eq 6 ]; then
+
                       logger -t lte-watchdog "Recovery 3: modem reset"
 
                       if command -v mmcli >/dev/null 2>&1; then
-                          MODEM_ID=$(mmcli -L 2>/dev/null | sed -n 's#.*Modem/\([0-9]*\).*#\1#p' | head -n1)
+
+                          MODEM_ID=$(mmcli -L 2>/dev/null \
+                              | sed -n 's#.*Modem/\([0-9]*\).*#\1#p' \
+                              | head -n1)
 
                           if [ -n "$MODEM_ID" ]; then
                               mmcli -m "$MODEM_ID" --reset >/dev/null 2>&1
@@ -298,19 +311,16 @@ jobs:
                   fi
 
                   # ------------------------------------------------
-                  # Recovery 4 - final router reboot
+                  # LEVEL 4 - router reboot
                   # ------------------------------------------------
 
                   if [ "$FAIL" -ge 8 ]; then
 
-                      if [ ! -f "$COOLDOWN" ]; then
-                          logger -t lte-watchdog "Recovery failed: rebooting router"
-                          touch "$COOLDOWN"
-                          reboot
-                      else
-                          logger -t lte-watchdog "Reboot cooldown active"
-                      fi
+                      logger -t lte-watchdog "Recovery failed - rebooting router"
+
+                      reboot
                   fi
+
               fi
 
               sleep 60
@@ -320,29 +330,83 @@ jobs:
           chmod +x files/usr/bin/lte-watchdog
 
       # ============================================================
+      # DOWNLOAD CUSTOM APK PACKAGES
+      # ============================================================
+
+      - name: Download 4IceG and APN packages
+        run: |
+
+          IB="openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64"
+
+          mkdir -p "$IB/packages"
+
+          # --------------------------------------------------------
+          # 4IceG - 3GInfo Lite
+          # --------------------------------------------------------
+
+          wget -q \
+            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/luci-app-3ginfo-lite-1.0.76-r20260202.apk \
+            -O "$IB/packages/luci-app-3ginfo-lite-1.0.76-r20260202.apk"
+
+          # --------------------------------------------------------
+          # 4IceG - ModemBand
+          # --------------------------------------------------------
+
+          wget -q \
+            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/luci-app-modemband-1.0.30-r20260120.apk \
+            -O "$IB/packages/luci-app-modemband-1.0.30-r20260120.apk"
+
+          # --------------------------------------------------------
+          # 4IceG - SMS Tool
+          # --------------------------------------------------------
+
+          wget -q \
+            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/luci-app-sms-tool-js-2.0.33-r20260126.apk \
+            -O "$IB/packages/luci-app-sms-tool-js-2.0.33-r20260126.apk"
+
+          # --------------------------------------------------------
+          # 4IceG - SMS Manager / ModemManager
+          # --------------------------------------------------------
+
+          wget -q \
+            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/luci-app-sms-manager-1.0.8-r20260126.apk \
+            -O "$IB/packages/luci-app-sms-manager-1.0.8-r20260126.apk"
+
+          # --------------------------------------------------------
+          # 4IceG - modem utilities
+          # --------------------------------------------------------
+
+          wget -q \
+            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/modemband-20251215-r3.apk \
+            -O "$IB/packages/modemband-20251215-r3.apk"
+
+          wget -q \
+            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/modemdata-20251216-r1.apk \
+            -O "$IB/packages/modemdata-20251216-r1.apk"
+
+          # --------------------------------------------------------
+          # Italian APN Web
+          # --------------------------------------------------------
+
+          wget -q \
+            https://github.com/ilblogdicristiangallo/apn-web-html_ipk/raw/refs/heads/main/apn-web-1.0.3-r1.apk \
+            -O "$IB/packages/apn-web-1.0.3-r1.apk"
+
+          # --------------------------------------------------------
+          # Verify downloaded packages
+          # --------------------------------------------------------
+
+          echo "Downloaded custom packages:"
+          ls -lh "$IB/packages/"*.apk
+
+      # ============================================================
       # BUILD
       # ============================================================
 
-      - name: Build MF286D firmware
+      - name: Build firmware
         run: |
 
           cd openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64
-
-          # --------------------------------------------------------
-          # 4IceG APK repository
-          # --------------------------------------------------------
-
-          echo "https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb" >> repositories
-
-          mkdir -p keys
-
-          wget -q \
-            https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem \
-            -O keys/IceG-apkpub.pem
-
-          # --------------------------------------------------------
-          # Image
-          # --------------------------------------------------------
 
           make image \
             PROFILE="zte_mf286d" \
@@ -353,7 +417,6 @@ jobs:
           luci-proto-mbim \
           luci-proto-modemmanager \
           modemmanager \
-          mmcli \
           uqmi \
           umbim \
           libqmi \
@@ -384,15 +447,14 @@ jobs:
           luci-app-modemband \
           luci-app-sms-tool-js \
           luci-app-sms-manager \
-          apn-web \
-          " \
+          apn-web" \
             FILES="../files"
 
       # ============================================================
       # UPLOAD SYSUPGRADE
       # ============================================================
 
-      - name: Upload firmware
+      - name: Upload sysupgrade firmware
         uses: actions/upload-artifact@v4
         with:
           name: MF286D-OpenWrt-25.12.4-FULL

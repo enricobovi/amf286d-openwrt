@@ -1,4 +1,4 @@
-name: MF286D OpenWrt 25.12.4 FULL
+name: Build MF286D OpenWrt 25.12.4
 
 on:
 workflow_dispatch:
@@ -8,287 +8,246 @@ build:
 runs-on: ubuntu-24.04
 
 steps:
+  - name: Checkout
+    uses: actions/checkout@v4
 
-  # ============================================================
-  # DOWNLOAD OPENWRT IMAGEBUILDER
-  # ============================================================
+  - name: Install build dependencies
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y \
+        build-essential \
+        clang \
+        flex \
+        bison \
+        gawk \
+        gettext \
+        git \
+        libncurses-dev \
+        libssl-dev \
+        python3 \
+        python3-setuptools \
+        rsync \
+        unzip \
+        wget \
+        zstd \
+        file \
+        time
+
   - name: Download OpenWrt ImageBuilder
-    shell: bash
     run: |
-      set -eu
+      wget -q https://downloads.openwrt.org/releases/25.12.4/targets/ipq40xx/generic/openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+      tar --zstd -xf openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst
+      echo "IB=$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-*' | head -n 1)" >> "$GITHUB_ENV"
+
+  - name: Configure 4IceG APK repository
+    working-directory: ${{ env.IB }}
+    run: |
+      wget -q \
+        https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem \
+        -O keys/IceG-apkpub.pem
+
+      echo "https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb" >> repositories
+
+  - name: Download APN Web APK
+    working-directory: ${{ env.IB }}
+    run: |
+      mkdir -p custom-apk
 
       wget -q \
-        "https://downloads.openwrt.org/releases/25.12.4/targets/ipq40xx/generic/openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst"
+        https://github.com/ilblogdicristiangallo/apn-web-html_ipk/raw/refs/heads/main/apn-web-1.0.3-r1.apk \
+        -O custom-apk/apn-web.apk
 
-      tar --zstd -xf \
-        "openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64.tar.zst"
-
-      IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-25.12.4-ipq40xx-generic.Linux-x86_64' | head -n 1)"
-
-      if [ -z "$IB_DIR" ]; then
-        echo "ERROR: ImageBuilder directory not found"
-        exit 1
-      fi
-
-      echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
-
-      echo "ImageBuilder:"
-      echo "$IB_DIR"
-
-
-  # ============================================================
-  # CONFIGURE 4ICEG APK REPOSITORY
-  # ============================================================
-  - name: Configure 4IceG repository
-    shell: bash
+  - name: Prepare custom files
+    working-directory: ${{ env.IB }}
     run: |
-      set -eu
-
-      cd "$IB_DIR"
-
-      mkdir -p keys
-
-      wget -q \
-        "https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/IceG-apkpub.pem" \
-        -O "keys/IceG-apkpub.pem"
-
-      if [ ! -s "keys/IceG-apkpub.pem" ]; then
-        echo "ERROR: 4IceG public key was not downloaded"
-        exit 1
-      fi
-
-      REPO_URL="https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb"
-
-      grep -v "4IceG/Modem-extras-apk" repositories > repositories.new || true
-      mv repositories.new repositories
-
-      echo "$REPO_URL" >> repositories
-
-      echo
-      echo "=== APK repositories ==="
-      cat repositories
-
-      echo
-      echo "=== APK keys ==="
-      ls -lh keys/IceG-apkpub.pem
-
-
-  # ============================================================
-  # DOWNLOAD APN-WEB
-  # ============================================================
-  - name: Add APN Web
-    shell: bash
-    run: |
-      set -eu
-
-      cd "$IB_DIR"
-
-      mkdir -p files
-      mkdir -p /tmp/apn-web
-
-      APN_URL="https://raw.githubusercontent.com/ilblogdicristiangallo/apn-web-html_ipk/main/apn-web-1.0.3-r1.apk"
-
-      wget -q \
-        "$APN_URL" \
-        -O /tmp/apn-web/apn-web.apk
-
-      if [ ! -s /tmp/apn-web/apn-web.apk ]; then
-        echo "ERROR: apn-web APK download failed"
-        exit 1
-      fi
-
-      echo "APN package downloaded:"
-      ls -lh /tmp/apn-web/apn-web.apk
-
-      mkdir -p /tmp/apn-web/extracted
-
-      tar -xOf \
-        /tmp/apn-web/apn-web.apk \
-        data.tar.gz \
-        | tar -xz -C /tmp/apn-web/extracted
-
-      cp -a /tmp/apn-web/extracted/. files/
-
-      echo
-      echo "=== APN files installed into FILES ==="
-      find files -type f | sort
-
-
-  # ============================================================
-  # PREPARE CUSTOM FILES
-  # ============================================================
-  - name: Prepare custom configuration
-    shell: bash
-    run: |
-      set -eu
-
-      cd "$IB_DIR"
-
-      mkdir -p files/etc/uci-defaults
-      mkdir -p files/etc/init.d
       mkdir -p files/etc/config
+      mkdir -p files/etc/init.d
       mkdir -p files/usr/bin
+      mkdir -p files/etc/apk/repositories.d
+      mkdir -p files/etc/apk/keys
       mkdir -p files/mnt/usb
 
+      cp keys/IceG-apkpub.pem files/etc/apk/keys/IceG-apkpub.pem
 
-      # ========================================================
-      # WIFI / GUEST / FIREWALL
-      # ========================================================
-      cat > files/etc/uci-defaults/99-mf286d-custom <<'EOF'
-      #!/bin/sh
-
-      # --------------------------------------------------------
-      # WIFI COUNTRY
-      # --------------------------------------------------------
-      uci set wireless.radio0.country='IT' 2>/dev/null || true
-      uci set wireless.radio1.country='IT' 2>/dev/null || true
-
-
-      # --------------------------------------------------------
-      # DISABLE EXISTING WIFI INTERFACES
-      # --------------------------------------------------------
-      for section in $(uci show wireless 2>/dev/null | \
-          sed -n 's/^wireless\.[^=]*=wifi-iface$/\1/p'); do
-          uci set wireless."$section".disabled='1'
-      done
-
-
-      # --------------------------------------------------------
-      # MAIN 2.4 GHz
-      # --------------------------------------------------------
-      uci set wireless.main2g='wifi-iface'
-      uci set wireless.main2g.device='radio0'
-      uci set wireless.main2g.mode='ap'
-      uci set wireless.main2g.network='lan'
-      uci set wireless.main2g.ssid='MF286D-MAIN'
-      uci set wireless.main2g.encryption='sae-mixed'
-      uci set wireless.main2g.key='Mf286D-ChangeMe!2026'
-      uci set wireless.main2g.disabled='0'
-
-
-      # --------------------------------------------------------
-      # MAIN 5 GHz
-      # --------------------------------------------------------
-      uci set wireless.main5g='wifi-iface'
-      uci set wireless.main5g.device='radio1'
-      uci set wireless.main5g.mode='ap'
-      uci set wireless.main5g.network='lan'
-      uci set wireless.main5g.ssid='MF286D-MAIN'
-      uci set wireless.main5g.encryption='sae-mixed'
-      uci set wireless.main5g.key='Mf286D-ChangeMe!2026'
-      uci set wireless.main5g.disabled='0'
-
-
-      # --------------------------------------------------------
-      # GUEST NETWORK
-      # --------------------------------------------------------
-      uci set network.guest='interface'
-      uci set network.guest.proto='static'
-      uci set network.guest.ipaddr='192.168.50.1'
-      uci set network.guest.netmask='255.255.255.0'
-
-
-      # --------------------------------------------------------
-      # GUEST DHCP
-      # --------------------------------------------------------
-      uci set dhcp.guest='dhcp'
-      uci set dhcp.guest.interface='guest'
-      uci set dhcp.guest.start='100'
-      uci set dhcp.guest.limit='100'
-      uci set dhcp.guest.leasetime='12h'
-
-
-      # --------------------------------------------------------
-      # GUEST 2.4 GHz
-      # --------------------------------------------------------
-      uci set wireless.guest2g='wifi-iface'
-      uci set wireless.guest2g.device='radio0'
-      uci set wireless.guest2g.mode='ap'
-      uci set wireless.guest2g.network='guest'
-      uci set wireless.guest2g.ssid='MF286D-GUEST'
-      uci set wireless.guest2g.encryption='sae-mixed'
-      uci set wireless.guest2g.key='Mf286D-Guest!2026'
-      uci set wireless.guest2g.disabled='0'
-
-
-      # --------------------------------------------------------
-      # GUEST 5 GHz
-      # --------------------------------------------------------
-      uci set wireless.guest5g='wifi-iface'
-      uci set wireless.guest5g.device='radio1'
-      uci set wireless.guest5g.mode='ap'
-      uci set wireless.guest5g.network='guest'
-      uci set wireless.guest5g.ssid='MF286D-GUEST'
-      uci set wireless.guest5g.encryption='sae-mixed'
-      uci set wireless.guest5g.key='Mf286D-Guest!2026'
-      uci set wireless.guest5g.disabled='0'
-
-
-      uci commit wireless
-      uci commit network
-      uci commit dhcp
-
-
-      # --------------------------------------------------------
-      # GUEST FIREWALL
-      # --------------------------------------------------------
-      uci add firewall zone
-      uci set firewall.@zone[-1].name='guest'
-      uci set firewall.@zone[-1].network='guest'
-      uci set firewall.@zone[-1].input='REJECT'
-      uci set firewall.@zone[-1].output='ACCEPT'
-      uci set firewall.@zone[-1].forward='REJECT'
-
-
-      # Guest -> WAN
-      uci add firewall forwarding
-      uci set firewall.@forwarding[-1].src='guest'
-      uci set firewall.@forwarding[-1].dest='wan'
-
-
-      # DHCP
-      uci add firewall rule
-      uci set firewall.@rule[-1].name='Guest-DHCP'
-      uci set firewall.@rule[-1].src='guest'
-      uci set firewall.@rule[-1].proto='udp'
-      uci set firewall.@rule[-1].dest_port='67-68'
-      uci set firewall.@rule[-1].target='ACCEPT'
-
-
-      # DNS
-      uci add firewall rule
-      uci set firewall.@rule[-1].name='Guest-DNS'
-      uci set firewall.@rule[-1].src='guest'
-      uci set firewall.@rule[-1].proto='tcp udp'
-      uci set firewall.@rule[-1].dest_port='53'
-      uci set firewall.@rule[-1].target='ACCEPT'
-
-
-      # Block access to LAN
-      uci add firewall rule
-      uci set firewall.@rule[-1].name='Guest-Block-LAN'
-      uci set firewall.@rule[-1].src='guest'
-      uci set firewall.@rule[-1].dest_ip='192.168.1.0/24'
-      uci set firewall.@rule[-1].target='REJECT'
-
-
-      uci commit firewall
-
-      exit 0
+      cat > files/etc/apk/repositories.d/customfeeds.list <<'EOF'
+      https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb
       EOF
 
-      chmod +x files/etc/uci-defaults/99-mf286d-custom
+      cat > files/etc/config/wireless <<'EOF'
+      config wifi-device 'radio0'
+          option type 'mac80211'
+          option path 'platform/soc@0/c000000.wifi'
+          option band '2g'
+          option htmode 'HT20'
+          option country 'IT'
+          option channel 'auto'
 
+      config wifi-iface 'main_2g'
+          option device 'radio0'
+          option mode 'ap'
+          option ssid 'MF286D-MAIN'
+          option encryption 'sae-mixed'
+          option key 'Mf286D-ChangeMe!2026'
+          option network 'lan'
 
-      # ========================================================
-      # SAMBA
-      # ========================================================
+      config wifi-iface 'guest_2g'
+          option device 'radio0'
+          option mode 'ap'
+          option ssid 'MF286D-GUEST'
+          option encryption 'sae-mixed'
+          option key 'Mf286D-Guest!2026'
+          option network 'guest'
+
+      config wifi-device 'radio1'
+          option type 'mac80211'
+          option path 'platform/soc@0/c000000.wifi+1'
+          option band '5g'
+          option htmode 'VHT80'
+          option country 'IT'
+          option channel 'auto'
+
+      config wifi-iface 'main_5g'
+          option device 'radio1'
+          option mode 'ap'
+          option ssid 'MF286D-MAIN'
+          option encryption 'sae-mixed'
+          option key 'Mf286D-ChangeMe!2026'
+          option network 'lan'
+
+      config wifi-iface 'guest_5g'
+          option device 'radio1'
+          option mode 'ap'
+          option ssid 'MF286D-GUEST'
+          option encryption 'sae-mixed'
+          option key 'Mf286D-Guest!2026'
+          option network 'guest'
+      EOF
+
+      cat > files/etc/config/network <<'EOF'
+      config interface 'loopback'
+          option device 'lo'
+          option proto 'static'
+          option ipaddr '127.0.0.1'
+          option netmask '255.0.0.0'
+
+      config device
+          option name 'br-lan'
+          option type 'bridge'
+          list ports 'lan2'
+          list ports 'lan3'
+          list ports 'lan4'
+
+      config interface 'lan'
+          option device 'br-lan'
+          option proto 'static'
+          option ipaddr '192.168.1.1'
+          option netmask '255.255.255.0'
+
+      config interface 'guest'
+          option proto 'static'
+          option ipaddr '192.168.50.1'
+          option netmask '255.255.255.0'
+
+      config interface 'wan'
+          option proto 'modemmanager'
+          option device '/sys/class/net/wwan0'
+          option apn 'internet'
+          option iptype 'ipv4'
+      EOF
+
+      cat > files/etc/config/dhcp <<'EOF'
+      config dnsmasq
+          option domainneeded '1'
+          option boguspriv '1'
+          option filterwin2k '0'
+          option localise_queries '1'
+          option rebind_protection '1'
+          option local '/lan/'
+          option domain 'lan'
+          option expandhosts '1'
+          option cachesize '1000'
+          option authoritative '1'
+          option readethers '1'
+          option leasefile '/tmp/dhcp.leases'
+          option resolvfile '/tmp/resolv.conf.d/resolv.conf.auto'
+
+      config dhcp 'lan'
+          option interface 'lan'
+          option start '100'
+          option limit '150'
+          option leasetime '12h'
+
+      config dhcp 'guest'
+          option interface 'guest'
+          option start '100'
+          option limit '100'
+          option leasetime '12h'
+      EOF
+
+      cat > files/etc/config/firewall <<'EOF'
+      config defaults
+          option syn_flood '1'
+          option input 'REJECT'
+          option output 'ACCEPT'
+          option forward 'REJECT'
+
+      config zone
+          option name 'lan'
+          list network 'lan'
+          option input 'ACCEPT'
+          option output 'ACCEPT'
+          option forward 'ACCEPT'
+
+      config zone
+          option name 'guest'
+          list network 'guest'
+          option input 'REJECT'
+          option output 'ACCEPT'
+          option forward 'REJECT'
+
+      config zone
+          option name 'wan'
+          list network 'wan'
+          option input 'REJECT'
+          option output 'ACCEPT'
+          option forward 'REJECT'
+          option masq '1'
+          option mtu_fix '1'
+
+      config forwarding
+          option src 'lan'
+          option dest 'wan'
+
+      config forwarding
+          option src 'guest'
+          option dest 'wan'
+
+      config rule
+          option name 'Guest-DHCP'
+          option src 'guest'
+          option proto 'udp'
+          option dest_port '67-68'
+          option target 'ACCEPT'
+
+      config rule
+          option name 'Guest-DNS'
+          option src 'guest'
+          option proto 'tcp udp'
+          option dest_port '53'
+          option target 'ACCEPT'
+
+      config rule
+          option name 'Block-Guest-LAN'
+          option src 'guest'
+          option dest 'lan'
+          option target 'REJECT'
+      EOF
+
       cat > files/etc/config/samba4 <<'EOF'
       config samba
           option name 'MF286D'
           option workgroup 'WORKGROUP'
-          option description 'MF286D Home Storage'
-          option homes '0'
+          option description 'MF286D USB Storage'
           option interface 'lan'
 
       config sambashare
@@ -300,422 +259,190 @@ steps:
           option dir_mask '0777'
       EOF
 
-
-      # ========================================================
-      # USB STORAGE
-      # ========================================================
-      cat > files/etc/init.d/usb-storage-mount <<'EOF'
+      cat > files/etc/init.d/usb-storage <<'EOF'
       #!/bin/sh /etc/rc.common
-
-      START=95
-
-      start() {
-          mkdir -p /mnt/usb
-
-          sleep 5
-
-          for DEV in /dev/sd[a-z][0-9]; do
-              if [ -b "$DEV" ]; then
-                  if ! mountpoint -q /mnt/usb; then
-                      mount "$DEV" /mnt/usb 2>/dev/null || true
-
-                      if mountpoint -q /mnt/usb; then
-                          logger -t usb-storage \
-                              "Mounted $DEV on /mnt/usb"
-                          break
-                      fi
-                  fi
-              fi
-          done
-      }
-
-      stop() {
-          if mountpoint -q /mnt/usb; then
-              umount /mnt/usb 2>/dev/null || true
-          fi
-      }
-      EOF
-
-      chmod +x files/etc/init.d/usb-storage-mount
-
-
-      # ========================================================
-      # LTE WATCHDOG SERVICE
-      # ========================================================
-      cat > files/etc/init.d/lte-watchdog <<'EOF'
-      #!/bin/sh /etc/rc.common
-
       START=99
 
       start() {
-          /usr/bin/lte-watchdog &
+          sleep 10
+
+          mkdir -p /mnt/usb
+
+          for dev in /dev/sd[a-z][0-9]; do
+              [ -b "$dev" ] || continue
+
+              mount "$dev" /mnt/usb 2>/dev/null && {
+                  logger -t usb-storage "USB mounted: $dev -> /mnt/usb"
+                  return 0
+              }
+          done
+
+          logger -t usb-storage "No USB storage mounted"
       }
 
       stop() {
-          killall lte-watchdog 2>/dev/null || true
+          umount /mnt/usb 2>/dev/null || true
       }
       EOF
 
-      chmod +x files/etc/init.d/lte-watchdog
+      chmod +x files/etc/init.d/usb-storage
 
-
-      # ========================================================
-      # LTE WATCHDOG
-      #
-      # 2 failures -> WAN reconnect
-      # 4 failures -> ModemManager restart
-      # 6 failures -> modem reset
-      # 8 failures -> router reboot
-      # ========================================================
-      cat > files/usr/bin/lte-watchdog <<'EOF'
+      cat > files/usr/bin/mf286d-watchdog <<'EOF'
       #!/bin/sh
 
-      STATE="/tmp/lte-watchdog.fail"
+      STATE="/tmp/mf286d-watchdog.failures"
+      LOGTAG="mf286d-watchdog"
+
       FAIL=0
+      [ -f "$STATE" ] && FAIL="$(cat "$STATE" 2>/dev/null)"
 
-      [ -f "$STATE" ] && FAIL="$(cat "$STATE" 2>/dev/null || echo 0)"
+      check_internet() {
+          nslookup openwrt.org 1.1.1.1 >/dev/null 2>&1
+      }
 
-      while true; do
-
-          IP_OK=0
-          DNS_OK=0
-
-
-          # Internet test
-          if ping -c 2 -W 5 1.1.1.1 >/dev/null 2>&1; then
-              IP_OK=1
-          fi
-
-
-          # DNS test
-          if nslookup openwrt.org 1.1.1.1 >/dev/null 2>&1; then
-              DNS_OK=1
-          fi
-
-
-          if [ "$IP_OK" = "1" ] && [ "$DNS_OK" = "1" ]; then
-
-              if [ "$FAIL" -gt 0 ]; then
-                  logger -t lte-watchdog \
-                      "Internet/LTE connection restored"
-              fi
-
-              FAIL=0
-              echo 0 > "$STATE"
-
-          else
-
-              FAIL=$((FAIL + 1))
-              echo "$FAIL" > "$STATE"
-
-              logger -t lte-watchdog \
-                  "Internet/LTE failure $FAIL"
-
-
-              # ------------------------------------------------
-              # RECOVERY 1
-              # ------------------------------------------------
-              if [ "$FAIL" -eq 2 ]; then
-
-                  logger -t lte-watchdog \
-                      "Recovery 1: WAN reconnect"
-
-                  ifdown wan 2>/dev/null || true
-                  sleep 10
-                  ifup wan 2>/dev/null || true
-              fi
-
-
-              # ------------------------------------------------
-              # RECOVERY 2
-              # ------------------------------------------------
-              if [ "$FAIL" -eq 4 ]; then
-
-                  logger -t lte-watchdog \
-                      "Recovery 2: ModemManager restart"
-
-                  /etc/init.d/modemmanager restart \
-                      2>/dev/null || true
-
-                  sleep 45
-              fi
-
-
-              # ------------------------------------------------
-              # RECOVERY 3
-              # ------------------------------------------------
-              if [ "$FAIL" -eq 6 ]; then
-
-                  logger -t lte-watchdog \
-                      "Recovery 3: modem reset"
-
-                  if command -v mmcli >/dev/null 2>&1; then
-
-                      MODEM_ID="$(
-                          mmcli -L 2>/dev/null |
-                          sed -n 's#.*Modem/[0-9]*.*#\1#p' |
-                          head -n 1
-                      )"
-
-                      if [ -n "$MODEM_ID" ]; then
-
-                          logger -t lte-watchdog \
-                              "Resetting modem $MODEM_ID"
-
-                          mmcli -m "$MODEM_ID" --reset \
-                              >/dev/null 2>&1 || true
-
-                          sleep 60
-                      fi
-                  fi
-              fi
-
-
-              # ------------------------------------------------
-              # RECOVERY 4
-              # ------------------------------------------------
-              if [ "$FAIL" -ge 8 ]; then
-
-                  logger -t lte-watchdog \
-                      "LTE recovery failed - rebooting router"
-
-                  reboot
-              fi
-          fi
-
-          sleep 60
-      done
-      EOF
-
-      chmod +x files/usr/bin/lte-watchdog
-
-
-      # ========================================================
-      # ENABLE SERVICES
-      # ========================================================
-      cat > files/etc/uci-defaults/100-mf286d-services <<'EOF'
-      #!/bin/sh
-
-      /etc/init.d/usb-storage-mount enable 2>/dev/null || true
-      /etc/init.d/lte-watchdog enable 2>/dev/null || true
-
-      exit 0
-      EOF
-
-      chmod +x files/etc/uci-defaults/100-mf286d-services
-
-
-  # ============================================================
-  # PACKAGE LIST
-  # ============================================================
-  - name: Prepare package list
-    shell: bash
-    run: |
-      set -eu
-
-      cd "$IB_DIR"
-
-      cat > /tmp/packages.txt <<'EOF'
-      luci
-      luci-ssl
-      luci-proto-qmi
-      luci-proto-mbim
-      luci-proto-modemmanager
-      modemmanager
-      uqmi
-      umbim
-      libqmi
-      usb-modeswitch
-      kmod-usb-net-qmi-wwan
-      kmod-usb-net-cdc-mbim
-      kmod-usb-wdm
-      kmod-usb-serial
-      kmod-usb-serial-option
-      kmod-usb-serial-wwan
-      wireguard-tools
-      kmod-wireguard
-      luci-proto-wireguard
-      openvpn-openssl
-      luci-app-openvpn
-      kmod-usb-storage
-      block-mount
-      kmod-fs-ext4
-      kmod-fs-vfat
-      samba4-server
-      luci-app-samba4
-      curl
-      wget-ssl
-      ca-bundle
-      jq
-      tcpdump
-      luci-app-modemdata
-      luci-app-sms-manager
-      EOF
-
-      PACKAGES="$(tr '\n' ' ' < /tmp/packages.txt)"
-
-      echo "PACKAGES=$PACKAGES" >> "$GITHUB_ENV"
-
-      echo
-      echo "=== PACKAGES ==="
-      cat /tmp/packages.txt
-
-
-  # ============================================================
-  # VERIFY REQUIRED 4ICEG PACKAGES ARE IN THE REPOSITORY
-  # ============================================================
-  - name: Verify 4IceG packages
-    shell: bash
-    run: |
-      set -eu
-
-      cd "$IB_DIR"
-
-      REPO_URL="https://github.com/4IceG/Modem-extras-apk/raw/refs/heads/main/myapk/packages.adb"
-
-      wget -q \
-        "$REPO_URL" \
-        -O /tmp/4iceg-packages.adb
-
-      if [ ! -s /tmp/4iceg-packages.adb ]; then
-        echo "ERROR: 4IceG package index is empty"
-        exit 1
+      if check_internet; then
+          FAIL=0
+          echo "$FAIL" > "$STATE"
+          logger -t "$LOGTAG" "Internet OK"
+          exit 0
       fi
 
-      echo "4IceG repository index downloaded."
+      FAIL=$((FAIL + 1))
+      echo "$FAIL" > "$STATE"
+      logger -t "$LOGTAG" "Internet failure #$FAIL"
 
-      for PKG in \
-        luci-app-modemdata \
+      case "$FAIL" in
+          2)
+              logger -t "$LOGTAG" "Failure 2: reconnect WAN"
+              ifdown wan 2>/dev/null
+              sleep 5
+              ifup wan 2>/dev/null
+              ;;
+          4)
+              logger -t "$LOGTAG" "Failure 4: restart ModemManager"
+              /etc/init.d/modemmanager restart 2>/dev/null
+              ;;
+          6)
+              logger -t "$LOGTAG" "Failure 6: modem reset"
+              ubus call modemmanager reset 2>/dev/null || true
+              sleep 10
+              ;;
+          8)
+              logger -t "$LOGTAG" "Failure 8: reboot router"
+              reboot
+              ;;
+      esac
+      EOF
+
+      chmod +x files/usr/bin/mf286d-watchdog
+
+      cat > files/etc/init.d/mf286d-watchdog <<'EOF'
+      #!/bin/sh /etc/rc.common
+      START=98
+
+      start() {
+          rm -f /tmp/mf286d-watchdog.failures
+
+          while true; do
+              /usr/bin/mf286d-watchdog
+              sleep 60
+          done &
+      }
+
+      stop() {
+          killall mf286d-watchdog 2>/dev/null || true
+      }
+      EOF
+
+      chmod +x files/etc/init.d/mf286d-watchdog
+
+      cat > files/etc/config/ucitrack <<'EOF'
+      config samba4
+          option init 'samba4'
+          list affects 'luci-app-samba4'
+
+      config modemmanager
+          option init 'modemmanager'
+      EOF
+
+  - name: Build firmware
+    working-directory: ${{ env.IB }}
+    env:
+      PACKAGES: >-
+        luci
+        luci-ssl
+        luci-app-firewall
+        luci-proto-qmi
+        luci-proto-mbim
+        luci-proto-modemmanager
+        modemmanager
+        uqmi
+        umbim
+        usb-modeswitch
+        kmod-usb-wdm
+        kmod-usb-net-qmi-wwan
+        kmod-usb-net-cdc-mbim
+        kmod-usb-serial
+        kmod-usb-serial-option
+        kmod-usb-serial-wwan
+        kmod-usb-storage
+        block-mount
+        mount-utils
+        e2fsprogs
+        kmod-fs-ext4
+        kmod-fs-vfat
+        samba4-server
+        luci-app-samba4
+        wireguard-tools
+        kmod-wireguard
+        luci-proto-wireguard
+        ca-bundle
+        wget-ssl
+        curl
+        jq
+        dnsmasq
+        ip-full
+        luci-app-modemdata
+        modemdata
         luci-app-sms-manager
-      do
-        if ! grep -q "\"$PKG\"" /tmp/4iceg-packages.adb; then
-          echo "ERROR: package not found in 4IceG repository: $PKG"
-          exit 1
-        fi
-
-        echo "OK: $PKG"
-      done
-
-
-  # ============================================================
-  # TEST PACKAGE RESOLUTION
-  # ============================================================
-  - name: Check package resolution
-    shell: bash
+        -luci-app-modemband
+        -modemband
+        -luci-app-3ginfo-lite
+        -luci-app-sms-tool-js
     run: |
-      set -eu
+      set -eux
 
-      cd "$IB_DIR"
+      mkdir -p packages
 
-      echo
-      echo "=== IMAGEBUILDER INFO ==="
-      make info
-
-      echo
-      echo "=== PACKAGE RESOLUTION ==="
+      cp custom-apk/apn-web.apk packages/apn-web.apk
 
       make manifest \
         PROFILE="zte_mf286d" \
         PACKAGES="$PACKAGES" \
-        STRIP_ABI=1 \
-        V=s
-
-
-  # ============================================================
-  # BUILD FIRMWARE
-  # ============================================================
-  - name: Build MF286D firmware
-    shell: bash
-    run: |
-      set -eu
-
-      cd "$IB_DIR"
+        STRIP_ABI=1
 
       make image \
         PROFILE="zte_mf286d" \
-        PACKAGES="$PACKAGES" \
+        PACKAGES="$PACKAGES apn-web" \
         FILES="files" \
         EXTRA_IMAGE_NAME="FULL-25.12.4" \
-        V=s
+        BIN_DIR="$GITHUB_WORKSPACE/bin"
 
-
-  # ============================================================
-  # VERIFY IMAGE
-  # ============================================================
   - name: Verify firmware
-    shell: bash
     run: |
-      set -eu
+      set -eux
 
-      cd "$IB_DIR"
+      ls -lh bin/
 
-      echo
-      echo "=== GENERATED FILES ==="
+      test -n "$(find bin -type f -name '*zte_mf286d*squashfs-sysupgrade.bin' -print -quit)"
 
-      find bin/targets/ipq40xx/generic \
-        -maxdepth 1 \
-        -type f \
-        -print
+      echo "=== Firmware found ==="
+      find bin -type f -name '*zte_mf286d*squashfs-sysupgrade.bin' -print
 
-
-      IMAGE="$(
-        find bin/targets/ipq40xx/generic \
-          -maxdepth 1 \
-          -type f \
-          -name '*zte_mf286d*squashfs-sysupgrade.bin' \
-          | head -n 1
-      )"
-
-
-      if [ -z "$IMAGE" ]; then
-        echo "ERROR: sysupgrade image not found"
-        exit 1
-      fi
-
-
-      echo
-      echo "=== FINAL IMAGE ==="
-      echo "$IMAGE"
-
-
-      echo
-      echo "=== SHA256 ==="
-      sha256sum "$IMAGE"
-
-
-      echo
-      echo "=== SIZE ==="
-      du -h "$IMAGE"
-
-
-  # ============================================================
-  # FINAL MANIFEST
-  # ============================================================
-  - name: Show final manifest
-    shell: bash
-    run: |
-      set -eu
-
-      cd "$IB_DIR"
-
-      make manifest \
-        PROFILE="zte_mf286d" \
-        PACKAGES="$PACKAGES" \
-        STRIP_ABI=1 \
-        > /tmp/final-manifest.txt
-
-      echo "=== FINAL MANIFEST ==="
-      cat /tmp/final-manifest.txt
-
-
-  # ============================================================
-  # UPLOAD SYSUPGRADE
-  # ============================================================
-  - name: Upload firmware
+  - name: Upload firmware artifact
     uses: actions/upload-artifact@v4
     with:
       name: MF286D-OpenWrt-25.12.4-FULL
-      path: |
-        ${{ env.IB_DIR }}/bin/targets/ipq40xx/generic/*zte_mf286d*squashfs-sysupgrade.bin
+      path: bin/*zte_mf286d*squashfs-sysupgrade.bin
       if-no-files-found: error
       retention-days: 30
